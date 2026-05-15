@@ -224,6 +224,34 @@ func TestBuildSendReminderValidation(t *testing.T) {
 	}
 }
 
+func TestBuildScheduleAt(t *testing.T) {
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) // Friday
+	scheduled, err := buildScheduleAt(now, "2026-05-20T08:00:00-07:00")
+	if err != nil {
+		t.Fatalf("buildScheduleAt RFC3339: %v", err)
+	}
+	if got, want := *scheduled, "2026-05-20T15:00:00.000Z"; got != want {
+		t.Fatalf("scheduled = %q want %q", got, want)
+	}
+	scheduled, err = buildScheduleAt(now, "+2d")
+	if err != nil {
+		t.Fatalf("buildScheduleAt +2d: %v", err)
+	}
+	if got, want := *scheduled, "2026-05-17T12:00:00.000Z"; got != want {
+		t.Fatalf("relative scheduled = %q want %q", got, want)
+	}
+	scheduled, err = buildScheduleAt(now, "Mon 8am")
+	if err != nil {
+		t.Fatalf("buildScheduleAt Mon 8am: %v", err)
+	}
+	if got, want := *scheduled, "2026-05-18T08:00:00.000Z"; got != want {
+		t.Fatalf("weekday scheduled = %q want %q", got, want)
+	}
+	if _, err := buildScheduleAt(now, "2024-01-01T00:00:00Z"); err == nil {
+		t.Fatalf("expected past schedule error")
+	}
+}
+
 // TestBuildOutgoingMessage_FromToAreObjects asserts the KD5 footgun's other
 // half: OutgoingMessage uses OBJECT-shaped from/to/cc/bcc fields with
 // {email, name?}. Same shape-pinning logic as the DraftValue test.
@@ -684,6 +712,62 @@ func TestSend_ReminderFlagErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at least 1h") {
 		t.Fatalf("error %q missing minimum window", err.Error())
+	}
+}
+
+func TestSendDryRun_ScheduleAt(t *testing.T) {
+	configPath, tokenStorePath := withConfigPath(t)
+	seedSendStore(t, tokenStorePath, "user@example.com", "1234567890123456789")
+	writeConfigPointingAt(t, configPath, "http://unused", "user@example.com")
+
+	stdout, _, err := executeCmd(t,
+		"--config", configPath,
+		"--dry-run",
+		"send",
+		"--to", "alice@example.com",
+		"--subject", "schedule",
+		"--body", "hello",
+		"--from", "user@example.com",
+		"--schedule-at", "2026-06-01T08:00:00-07:00",
+	)
+	if err != nil {
+		t.Fatalf("dry-run scheduled send: %v", err)
+	}
+	if !strings.Contains(stdout, `"scheduledFor": "2026-06-01T15:00:00.000Z"`) {
+		t.Fatalf("scheduledFor missing from dry-run payload: %s", stdout)
+	}
+}
+
+func TestSend_ScheduleAtAndUndoConflict(t *testing.T) {
+	configPath, tokenStorePath := withConfigPath(t)
+	seedSendStore(t, tokenStorePath, "user@example.com", "1234567890123456789")
+	writeConfigPointingAt(t, configPath, "http://unused", "user@example.com")
+
+	_, _, err := executeCmd(t,
+		"--config", configPath,
+		"send",
+		"--to", "alice@example.com",
+		"--subject", "schedule",
+		"--body", "hello",
+		"--from", "user@example.com",
+		"--schedule-at", "+2d",
+		"--undo", "30s",
+	)
+	if err == nil {
+		t.Fatalf("expected schedule/undo conflict")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error %q missing mutually exclusive", err.Error())
+	}
+}
+
+func TestSendCancelScheduleDryRun(t *testing.T) {
+	stdout, _, err := executeCmd(t, "--dry-run", "--json", "send", "--cancel-schedule", "draft001234567890ab")
+	if err != nil {
+		t.Fatalf("send --cancel-schedule: %v", err)
+	}
+	if !strings.Contains(stdout, "cancel_schedule") || !strings.Contains(stdout, "draft001234567890ab") {
+		t.Fatalf("cancel-schedule output wrong: %s", stdout)
 	}
 }
 

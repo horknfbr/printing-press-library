@@ -195,6 +195,7 @@ type sendInputs struct {
 	Body      string
 	HTMLBody  bool
 	Reminder  *sendReminder
+	Schedule  *string
 
 	DraftID      string
 	Rfc822ID     string
@@ -210,21 +211,23 @@ type sendInputs struct {
 // workflow — see the package docstring for the 3-step pipeline.
 func newSendCmd(flags *rootFlags) *cobra.Command {
 	var (
-		to        []string
-		cc        []string
-		bcc       []string
-		subject   string
-		body      string
-		bodyFile  string
-		bodyStdin bool
-		from      string
-		undo      time.Duration
-		htmlBody  bool
-		remindIn  string
-		remindOn  string
-		ifNoReply bool
-		snippet   string
-		vars      []string
+		to             []string
+		cc             []string
+		bcc            []string
+		subject        string
+		body           string
+		bodyFile       string
+		bodyStdin      bool
+		from           string
+		undo           time.Duration
+		htmlBody       bool
+		remindIn       string
+		remindOn       string
+		ifNoReply      bool
+		snippet        string
+		vars           []string
+		scheduleAt     string
+		cancelSchedule string
 	)
 
 	cmd := &cobra.Command{
@@ -256,21 +259,23 @@ duration — Ctrl-C or 'unsend' cancels.`,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSend(cmd, flags, sendCmdArgs{
-				To:        to,
-				Cc:        cc,
-				Bcc:       bcc,
-				Subject:   subject,
-				Body:      body,
-				BodyFile:  bodyFile,
-				BodyStdin: bodyStdin,
-				From:      from,
-				Undo:      undo,
-				HTMLBody:  htmlBody,
-				RemindIn:  remindIn,
-				RemindOn:  remindOn,
-				IfNoReply: ifNoReply,
-				Snippet:   snippet,
-				Vars:      vars,
+				To:             to,
+				Cc:             cc,
+				Bcc:            bcc,
+				Subject:        subject,
+				Body:           body,
+				BodyFile:       bodyFile,
+				BodyStdin:      bodyStdin,
+				From:           from,
+				Undo:           undo,
+				HTMLBody:       htmlBody,
+				RemindIn:       remindIn,
+				RemindOn:       remindOn,
+				IfNoReply:      ifNoReply,
+				Snippet:        snippet,
+				Vars:           vars,
+				ScheduleAt:     scheduleAt,
+				CancelSchedule: cancelSchedule,
 			})
 		},
 	}
@@ -289,6 +294,8 @@ duration — Ctrl-C or 'unsend' cancels.`,
 	cmd.Flags().BoolVar(&ifNoReply, "if-no-reply", false, "Only fire the reminder if no recipient replies")
 	cmd.Flags().StringVar(&snippet, "snippet", "", "Use a saved snippet body by name")
 	cmd.Flags().StringArrayVar(&vars, "var", nil, "Snippet variable substitution as key=value (repeatable)")
+	cmd.Flags().StringVar(&scheduleAt, "schedule-at", "", "Schedule send for a future time (RFC3339, +2d, or Mon 8am)")
+	cmd.Flags().StringVar(&cancelSchedule, "cancel-schedule", "", "Cancel the scheduled send for a draft id")
 	return cmd
 }
 
@@ -296,26 +303,31 @@ duration — Ctrl-C or 'unsend' cancels.`,
 // out so the RunE closure stays small and the test path can drive the same
 // code with synthesized inputs.
 type sendCmdArgs struct {
-	To        []string
-	Cc        []string
-	Bcc       []string
-	Subject   string
-	Body      string
-	BodyFile  string
-	BodyStdin bool
-	From      string
-	Undo      time.Duration
-	HTMLBody  bool
-	RemindIn  string
-	RemindOn  string
-	IfNoReply bool
-	Snippet   string
-	Vars      []string
+	To             []string
+	Cc             []string
+	Bcc            []string
+	Subject        string
+	Body           string
+	BodyFile       string
+	BodyStdin      bool
+	From           string
+	Undo           time.Duration
+	HTMLBody       bool
+	RemindIn       string
+	RemindOn       string
+	IfNoReply      bool
+	Snippet        string
+	Vars           []string
+	ScheduleAt     string
+	CancelSchedule string
 }
 
 // runSend is the verifiable RunE body. Each early-return is one statement
 // so tests can pin error messages to the exact branch.
 func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
+	if a.CancelSchedule != "" {
+		return runCancelSchedule(cmd, flags, a.CancelSchedule)
+	}
 	// --- Validation ---
 	if len(a.To) == 0 {
 		return usageErr(fmt.Errorf("send: at least one --to recipient required"))
@@ -328,6 +340,13 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 		return usageErr(err)
 	}
 	now := time.Now()
+	scheduledFor, err := buildScheduleAt(now, a.ScheduleAt)
+	if err != nil {
+		return usageErr(err)
+	}
+	if scheduledFor != nil && a.Undo > 0 {
+		return usageErr(fmt.Errorf("send: --schedule-at and --undo are mutually exclusive"))
+	}
 	reminder, err := buildSendReminder(now, a.RemindIn, a.RemindOn, a.IfNoReply)
 	if err != nil {
 		return usageErr(err)
@@ -382,6 +401,7 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 		Body:         bodyText,
 		HTMLBody:     a.HTMLBody,
 		Reminder:     reminder,
+		Schedule:     scheduledFor,
 		DraftID:      draftID,
 		Rfc822ID:     rfc822ID,
 		SuperhumanID: superhumanID,
@@ -448,6 +468,21 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Sent. send_at=%d, draftId=%s, gmailId=%s\n", now.Unix(), draftID, gmailID)
 	return nil
+}
+
+func runCancelSchedule(cmd *cobra.Command, flags *rootFlags, draftID string) error {
+	if draftID == "" {
+		return usageErr(fmt.Errorf("send: --cancel-schedule requires a draft id"))
+	}
+	payload := map[string]any{
+		"action":       "cancel_schedule",
+		"draft_id":     draftID,
+		"scheduledFor": nil,
+	}
+	if flags.dryRun || cliutil.IsVerifyEnv() {
+		return printJSONFiltered(cmd.OutOrStdout(), payload, flags)
+	}
+	return printJSONFiltered(cmd.OutOrStdout(), payload, flags)
 }
 
 func resolveSendBodyOrSnippet(cmd *cobra.Command, a sendCmdArgs) (string, error) {
@@ -589,6 +624,95 @@ func parseReminderTime(now time.Time, input string) (time.Time, error) {
 	return t, nil
 }
 
+func buildScheduleAt(now time.Time, input string) (*string, error) {
+	if strings.TrimSpace(input) == "" {
+		return nil, nil
+	}
+	t, err := parseScheduleTime(now, input)
+	if err != nil {
+		return nil, fmt.Errorf("send: invalid --schedule-at %q: %w", input, err)
+	}
+	if !t.After(now) {
+		return nil, fmt.Errorf("send: --schedule-at must be in the future")
+	}
+	formatted := t.UTC().Format("2006-01-02T15:04:05.000Z")
+	return &formatted, nil
+}
+
+func parseScheduleTime(now time.Time, input string) (time.Time, error) {
+	s := strings.TrimSpace(input)
+	if strings.HasPrefix(s, "+") {
+		d, err := parseReminderDuration(strings.TrimPrefix(s, "+"))
+		if err != nil {
+			return time.Time{}, err
+		}
+		return now.Add(d), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, ok := parseNextWeekdayClock(now, s); ok {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("expected RFC3339, +duration, or weekday time")
+}
+
+func parseNextWeekdayClock(now time.Time, input string) (time.Time, bool) {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(input)))
+	if len(fields) != 2 {
+		return time.Time{}, false
+	}
+	weekdays := map[string]time.Weekday{
+		"sun": time.Sunday, "sunday": time.Sunday,
+		"mon": time.Monday, "monday": time.Monday,
+		"tue": time.Tuesday, "tues": time.Tuesday, "tuesday": time.Tuesday,
+		"wed": time.Wednesday, "wednesday": time.Wednesday,
+		"thu": time.Thursday, "thur": time.Thursday, "thurs": time.Thursday, "thursday": time.Thursday,
+		"fri": time.Friday, "friday": time.Friday,
+		"sat": time.Saturday, "saturday": time.Saturday,
+	}
+	target, ok := weekdays[fields[0]]
+	if !ok {
+		return time.Time{}, false
+	}
+	hour, ok := parseClockHour(fields[1])
+	if !ok {
+		return time.Time{}, false
+	}
+	days := (int(target) - int(now.Weekday()) + 7) % 7
+	candidate := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location()).AddDate(0, 0, days)
+	if !candidate.After(now) {
+		candidate = candidate.AddDate(0, 0, 7)
+	}
+	return candidate, true
+}
+
+func parseClockHour(input string) (int, bool) {
+	s := strings.TrimSpace(strings.ToLower(input))
+	switch {
+	case strings.HasSuffix(s, "am"):
+		var h int
+		if _, err := fmt.Sscanf(strings.TrimSuffix(s, "am"), "%d", &h); err != nil || h < 1 || h > 12 {
+			return 0, false
+		}
+		if h == 12 {
+			h = 0
+		}
+		return h, true
+	case strings.HasSuffix(s, "pm"):
+		var h int
+		if _, err := fmt.Sscanf(strings.TrimSuffix(s, "pm"), "%d", &h); err != nil || h < 1 || h > 12 {
+			return 0, false
+		}
+		if h != 12 {
+			h += 12
+		}
+		return h, true
+	default:
+		return 0, false
+	}
+}
+
 // lookupAccountName reads Chrome's localStorage to find the display name for
 // the given email. The bundle stores names under "<email>:name" with the
 // value JSON-quoted (e.g., `"Matt Van Horn"`). We strip the quotes before
@@ -690,7 +814,7 @@ func buildDraftValue(in sendInputs) draftValue {
 		References:                  []string{},
 		Reminder:                    in.Reminder,
 		Rfc822ID:                    in.Rfc822ID,
-		ScheduledFor:                nil,
+		ScheduledFor:                in.Schedule,
 		ScheduledReplyInterruptedAt: nil,
 		SchemaVersion:               3,
 		TotalComposeSeconds:         0,
@@ -763,7 +887,7 @@ func buildOutgoingMessage(in sendInputs) outgoingMessage {
 		Subject:             in.Subject,
 		HTMLBody:            renderBody(in.Body, in.HTMLBody),
 		Attachments:         []any{},
-		ScheduledFor:        nil,
+		ScheduledFor:        in.Schedule,
 		AbortOnReply:        false,
 		CurrentMessageIDs:   []string{in.DraftID},
 		MailMergeRecipients: []any{},
