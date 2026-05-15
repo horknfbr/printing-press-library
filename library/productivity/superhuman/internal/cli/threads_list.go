@@ -15,6 +15,7 @@ import (
 
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/cliutil"
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/gmail"
+	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/store"
 )
 
 // supportedThreadTypes mirrors Superhuman backend system lists plus Gmail
@@ -58,6 +59,9 @@ func newThreadsListCmd(flags *rootFlags) *cobra.Command {
 	var stdinBody bool
 	var listType string
 	var pageToken string
+	var label string
+	var participantsFile string
+	var intersectStdin bool
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -80,6 +84,9 @@ account.`,
 		Annotations: map[string]string{"pp:endpoint": "threads.list", "pp:method": "POST", "pp:path": "/v3/userdata.getThreads", "mcp:read-only": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !stdinBody {
+			}
+			if label != "" || participantsFile != "" || intersectStdin {
+				return runThreadsListLocalFiltered(cmd, flags, listType, label, participantsFile, intersectStdin, bodyLimit)
 			}
 			if _, ok := gmailThreadListTypes[listType]; ok && !stdinBody {
 				return runThreadsListGmail(cmd, flags, listType, bodyLimit, pageToken)
@@ -185,8 +192,127 @@ account.`,
 	cmd.Flags().BoolVar(&stdinBody, "stdin", false, "Read request body as JSON from stdin")
 	cmd.Flags().StringVar(&listType, "type", "draft", "Thread list type (draft, reminder, scheduled, snippet, signature, knowledge-base, inbox, sent, done, starred, archived, spam, trash, important)")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "Continuation token for inbox listing (Gmail passthrough only)")
+	cmd.Flags().StringVar(&label, "label", "", "Filter local threads by Gmail or Superhuman label id/name")
+	cmd.Flags().StringVar(&participantsFile, "participants-file", "", "Filter local threads by newline or JSON-array email list")
+	cmd.Flags().BoolVar(&intersectStdin, "intersect-with-stdin", false, "Filter local threads by newline-delimited thread ids or emails from stdin")
 
 	return cmd
+}
+
+func runThreadsListLocalFiltered(cmd *cobra.Command, flags *rootFlags, listType, label, participantsFile string, intersectStdin bool, limit int) error {
+	if !supportedThreadTypes[listType] {
+		return fmt.Errorf("threads list: unsupported --type %q (valid: %s)", listType, strings.Join(validThreadTypes(), ", "))
+	}
+	var participants, threadIDs []string
+	if participantsFile != "" {
+		emails, err := readParticipantsFile(participantsFile)
+		if err != nil {
+			return usageErr(err)
+		}
+		participants = append(participants, emails...)
+	}
+	if intersectStdin {
+		stdinThreads, stdinEmails, err := readThreadIntersection(cmd.InOrStdin())
+		if err != nil {
+			return usageErr(err)
+		}
+		threadIDs = append(threadIDs, stdinThreads...)
+		participants = append(participants, stdinEmails...)
+	}
+	acct, err := resolveActiveAccount(flags)
+	if err != nil {
+		return authErr(fmt.Errorf("threads list local filters: %w", err))
+	}
+	db, err := store.OpenWithContext(cmd.Context(), defaultDBPath("superhuman-pp-cli"))
+	if err != nil {
+		return fmt.Errorf("opening local database: %w", err)
+	}
+	defer db.Close()
+	typeLabel := localThreadTypeLabel(listType)
+	threads, err := db.ListThreadsFiltered(cmd.Context(), store.ThreadFilter{
+		AccountEmail: acct.Email,
+		TypeLabel:    typeLabel,
+		Label:        label,
+		Participants: participants,
+		ThreadIDs:    threadIDs,
+		Limit:        limit,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSONFiltered(cmd.OutOrStdout(), map[string]any{
+		"action":   "threads.list",
+		"resource": "threads",
+		"type":     listType,
+		"label":    label,
+		"success":  true,
+		"threads":  threads,
+	}, flags)
+}
+
+func localThreadTypeLabel(listType string) string {
+	switch listType {
+	case "inbox":
+		return "INBOX"
+	case "sent":
+		return "SENT"
+	case "starred":
+		return "STARRED"
+	case "spam":
+		return "SPAM"
+	case "trash":
+		return "TRASH"
+	case "important":
+		return "IMPORTANT"
+	default:
+		return ""
+	}
+}
+
+func readParticipantsFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("threads list: read --participants-file %s: %w", path, err)
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(text, "[") {
+		var emails []string
+		if err := json.Unmarshal(data, &emails); err != nil {
+			return nil, fmt.Errorf("threads list: parse --participants-file JSON: %w", err)
+		}
+		return emails, nil
+	}
+	var emails []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			emails = append(emails, line)
+		}
+	}
+	return emails, nil
+}
+
+func readThreadIntersection(r io.Reader) ([]string, []string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, nil, fmt.Errorf("threads list: read stdin: %w", err)
+	}
+	var threadIDs, emails []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "@") {
+			emails = append(emails, line)
+		} else {
+			threadIDs = append(threadIDs, line)
+		}
+	}
+	return threadIDs, emails, nil
 }
 
 // runThreadsListGmail is the Gmail-folder branch. Gmail's users.threads.list
