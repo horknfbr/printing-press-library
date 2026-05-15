@@ -8,7 +8,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
+
+	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/gmail"
 )
 
 // StoredMessage is the local SQLite projection of Gmail's message resource.
@@ -161,6 +164,250 @@ func saveHistoryState(ctx context.Context, exec interface {
 	)
 	if err != nil {
 		return fmt.Errorf("save history_state: %w", err)
+	}
+	return nil
+}
+
+// HistoryState is the local Gmail history checkpoint for one account.
+type HistoryState struct {
+	AccountEmail   string
+	LastHistoryID  string
+	LastPolledAt   time.Time
+	LastFullSyncAt time.Time
+}
+
+// GetHistoryState returns the stored Gmail history checkpoint for an account.
+func (s *Store) GetHistoryState(ctx context.Context, accountEmail string) (*HistoryState, error) {
+	var row HistoryState
+	var polled, full sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT "account_email", "last_history_id", "last_polled_at", "last_full_sync_at"
+		FROM "history_state" WHERE "account_email" = ?`, accountEmail).Scan(&row.AccountEmail, &row.LastHistoryID, &polled, &full)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get history_state: %w", err)
+	}
+	if polled.Valid {
+		row.LastPolledAt, _ = time.Parse(time.RFC3339Nano, polled.String)
+	}
+	if full.Valid {
+		row.LastFullSyncAt, _ = time.Parse(time.RFC3339Nano, full.String)
+	}
+	return &row, nil
+}
+
+// HistoryApplyResult summarizes one applied Gmail history delta.
+type HistoryApplyResult struct {
+	Added         int
+	Deleted       int
+	LabelsChanged int
+	HistoryID     string
+}
+
+// ApplyHistoryDelta atomically applies a Gmail users.history.list response to
+// the local messages projection and advances history_state only after all row
+// mutations succeed.
+func (s *Store) ApplyHistoryDelta(ctx context.Context, delta *gmail.HistoryResponse) (*HistoryApplyResult, error) {
+	if delta == nil {
+		return &HistoryApplyResult{}, nil
+	}
+	if delta.AccountEmail == "" {
+		return nil, fmt.Errorf("history delta account email is required")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin history delta: %w", err)
+	}
+	defer tx.Rollback()
+
+	result := &HistoryApplyResult{HistoryID: delta.HistoryID}
+	for _, record := range delta.History {
+		for _, added := range record.MessagesAdded {
+			msg := storedMessageFromHistory(delta.AccountEmail, added.Message)
+			if msg.HistoryID == "" {
+				msg.HistoryID = record.ID
+			}
+			if err := upsertGmailMessageTx(ctx, tx, msg); err != nil {
+				return nil, err
+			}
+			result.Added++
+		}
+		for _, deleted := range record.MessagesDeleted {
+			if deleted.Message.ID == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM "messages" WHERE "id" = ? AND "account_email" = ?`, deleted.Message.ID, delta.AccountEmail); err != nil {
+				return nil, fmt.Errorf("delete message %s: %w", deleted.Message.ID, err)
+			}
+			result.Deleted++
+		}
+		for _, change := range record.LabelsAdded {
+			if change.Message.ID == "" {
+				continue
+			}
+			if err := mutateMessageLabels(ctx, tx, delta.AccountEmail, change.Message.ID, change.LabelIDs, true); err != nil {
+				return nil, err
+			}
+			result.LabelsChanged++
+		}
+		for _, change := range record.LabelsRemoved {
+			if change.Message.ID == "" {
+				continue
+			}
+			if err := mutateMessageLabels(ctx, tx, delta.AccountEmail, change.Message.ID, change.LabelIDs, false); err != nil {
+				return nil, err
+			}
+			result.LabelsChanged++
+		}
+	}
+	if delta.HistoryID != "" {
+		if err := saveHistoryPoll(ctx, tx, delta.AccountEmail, delta.HistoryID, time.Now()); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit history delta: %w", err)
+	}
+	return result, nil
+}
+
+func storedMessageFromHistory(accountEmail string, msg gmail.HistoryMessage) StoredMessage {
+	internalDate, _ := strconv.ParseInt(msg.InternalDate, 10, 64)
+	raw, _ := json.Marshal(msg)
+	return StoredMessage{
+		ID:           msg.ID,
+		ThreadID:     msg.ThreadID,
+		AccountEmail: accountEmail,
+		LabelIDs:     msg.LabelIDs,
+		Snippet:      msg.Snippet,
+		HistoryID:    msg.HistoryID,
+		InternalDate: internalDate,
+		Data:         raw,
+	}
+}
+
+func upsertGmailMessageTx(ctx context.Context, tx *sql.Tx, msg StoredMessage) error {
+	if msg.ID == "" {
+		return nil
+	}
+	labelJSON, err := json.Marshal(msg.LabelIDs)
+	if err != nil {
+		return fmt.Errorf("marshal labels for %s: %w", msg.ID, err)
+	}
+	data := msg.Data
+	if len(data) == 0 {
+		data, err = json.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("marshal message data for %s: %w", msg.ID, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO "messages" (
+		"id", "data", "synced_at", "thread_id", "account_email", "label_ids",
+		"from", "to", "cc", "subject", "snippet", "body_plain", "body_html",
+		"rfc822_id", "history_id", "internal_date"
+	) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT("id") DO UPDATE SET
+		"data" = excluded."data",
+		"synced_at" = CURRENT_TIMESTAMP,
+		"thread_id" = excluded."thread_id",
+		"account_email" = excluded."account_email",
+		"label_ids" = excluded."label_ids",
+		"from" = excluded."from",
+		"to" = excluded."to",
+		"cc" = excluded."cc",
+		"subject" = excluded."subject",
+		"snippet" = excluded."snippet",
+		"body_plain" = excluded."body_plain",
+		"body_html" = excluded."body_html",
+		"rfc822_id" = excluded."rfc822_id",
+		"history_id" = excluded."history_id",
+		"internal_date" = excluded."internal_date"`,
+		msg.ID,
+		string(data),
+		msg.ThreadID,
+		msg.AccountEmail,
+		string(labelJSON),
+		msg.From,
+		msg.To,
+		msg.Cc,
+		msg.Subject,
+		msg.Snippet,
+		msg.BodyPlain,
+		msg.BodyHTML,
+		msg.RFC822ID,
+		msg.HistoryID,
+		msg.InternalDate,
+	); err != nil {
+		return fmt.Errorf("upsert message %s: %w", msg.ID, err)
+	}
+	return nil
+}
+
+func saveHistoryPoll(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, accountEmail, historyID string, polledAt time.Time) error {
+	if accountEmail == "" {
+		return fmt.Errorf("history_state account_email is required")
+	}
+	_, err := exec.ExecContext(ctx, `INSERT INTO "history_state" (
+		"account_email", "last_history_id", "last_polled_at", "last_full_sync_at"
+	) VALUES (?, ?, ?, NULL)
+	ON CONFLICT("account_email") DO UPDATE SET
+		"last_history_id" = excluded."last_history_id",
+		"last_polled_at" = excluded."last_polled_at"`,
+		accountEmail,
+		historyID,
+		polledAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("save history poll: %w", err)
+	}
+	return nil
+}
+
+func mutateMessageLabels(ctx context.Context, tx *sql.Tx, accountEmail, messageID string, changed []string, add bool) error {
+	var raw sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT "label_ids" FROM "messages" WHERE "id" = ? AND "account_email" = ?`, messageID, accountEmail).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load labels for %s: %w", messageID, err)
+	}
+	labels := map[string]bool{}
+	if raw.Valid && raw.String != "" {
+		var existing []string
+		if err := json.Unmarshal([]byte(raw.String), &existing); err != nil {
+			return fmt.Errorf("decode labels for %s: %w", messageID, err)
+		}
+		for _, label := range existing {
+			labels[label] = true
+		}
+	}
+	for _, label := range changed {
+		if label == "" {
+			continue
+		}
+		if add {
+			labels[label] = true
+		} else {
+			delete(labels, label)
+		}
+	}
+	next := make([]string, 0, len(labels))
+	for label := range labels {
+		next = append(next, label)
+	}
+	labelJSON, err := json.Marshal(next)
+	if err != nil {
+		return fmt.Errorf("marshal labels for %s: %w", messageID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE "messages" SET "label_ids" = ?, "synced_at" = CURRENT_TIMESTAMP WHERE "id" = ? AND "account_email" = ?`, string(labelJSON), messageID, accountEmail); err != nil {
+		return fmt.Errorf("update labels for %s: %w", messageID, err)
 	}
 	return nil
 }

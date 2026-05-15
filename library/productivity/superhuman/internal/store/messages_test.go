@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/gmail"
 )
 
 func TestUpsertGmailMessages_IndexesLabelsAndFTS(t *testing.T) {
@@ -69,6 +71,115 @@ func TestUpsertGmailMessages_IndexesLabelsAndFTS(t *testing.T) {
 	}
 	if ftsCount != 1 {
 		t.Fatalf("updated fts count = %d want 1", ftsCount)
+	}
+}
+
+func TestApplyHistoryDelta_AppliesMessagesAndLabelsAtomically(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.UpsertGmailMessages(ctx, []StoredMessage{
+		{ID: "msg-keep", ThreadID: "thread-keep", AccountEmail: "user@example.com", LabelIDs: []string{"INBOX"}, Subject: "Keep"},
+		{ID: "msg-delete", ThreadID: "thread-delete", AccountEmail: "user@example.com", LabelIDs: []string{"INBOX"}, Subject: "Delete"},
+	}); err != nil {
+		t.Fatalf("seed messages: %v", err)
+	}
+	if err := s.SaveHistoryState(ctx, "user@example.com", "100", time.Now().Add(-time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("seed history state: %v", err)
+	}
+
+	result, err := s.ApplyHistoryDelta(ctx, &gmail.HistoryResponse{
+		AccountEmail: "user@example.com",
+		HistoryID:    "104",
+		History: []gmail.HistoryRecord{
+			{
+				ID: "101",
+				MessagesAdded: []gmail.HistoryMessageChange{{Message: gmail.HistoryMessage{
+					ID:           "msg-add",
+					ThreadID:     "thread-add",
+					LabelIDs:     []string{"SENT"},
+					Snippet:      "new sent message",
+					HistoryID:    "101",
+					InternalDate: "1700000000000",
+				}}},
+				MessagesDeleted: []gmail.HistoryMessageChange{{Message: gmail.HistoryMessage{ID: "msg-delete"}}},
+				LabelsAdded:     []gmail.HistoryLabelChange{{Message: gmail.HistoryMessage{ID: "msg-keep"}, LabelIDs: []string{"STARRED"}}},
+				LabelsRemoved:   []gmail.HistoryLabelChange{{Message: gmail.HistoryMessage{ID: "msg-keep"}, LabelIDs: []string{"INBOX"}}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyHistoryDelta: %v", err)
+	}
+	if result.Added != 1 || result.Deleted != 1 || result.LabelsChanged != 2 || result.HistoryID != "104" {
+		t.Fatalf("result wrong: %+v", result)
+	}
+
+	var addCount, deleteCount, starredCount, inboxCount int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE id = 'msg-add' AND account_email = 'user@example.com'`).Scan(&addCount); err != nil {
+		t.Fatalf("count add: %v", err)
+	}
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE id = 'msg-delete'`).Scan(&deleteCount); err != nil {
+		t.Fatalf("count delete: %v", err)
+	}
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM label_index WHERE message_id = 'msg-keep' AND label_id = 'STARRED'`).Scan(&starredCount); err != nil {
+		t.Fatalf("count starred: %v", err)
+	}
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM label_index WHERE message_id = 'msg-keep' AND label_id = 'INBOX'`).Scan(&inboxCount); err != nil {
+		t.Fatalf("count inbox: %v", err)
+	}
+	if addCount != 1 || deleteCount != 0 || starredCount != 1 || inboxCount != 0 {
+		t.Fatalf("counts add=%d delete=%d starred=%d inbox=%d, want 1/0/1/0", addCount, deleteCount, starredCount, inboxCount)
+	}
+	state, err := s.GetHistoryState(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("GetHistoryState: %v", err)
+	}
+	if state == nil || state.LastHistoryID != "104" {
+		t.Fatalf("history state = %+v want last_history_id=104", state)
+	}
+}
+
+func TestApplyHistoryDelta_EmptyDeltaAdvancesHistory(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	result, err := s.ApplyHistoryDelta(context.Background(), &gmail.HistoryResponse{
+		AccountEmail: "user@example.com",
+		HistoryID:    "200",
+	})
+	if err != nil {
+		t.Fatalf("ApplyHistoryDelta empty: %v", err)
+	}
+	if result.Added != 0 || result.Deleted != 0 || result.LabelsChanged != 0 {
+		t.Fatalf("result = %+v want no row changes", result)
+	}
+	state, err := s.GetHistoryState(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("GetHistoryState: %v", err)
+	}
+	if state == nil || state.LastHistoryID != "200" {
+		t.Fatalf("history state = %+v want last_history_id=200", state)
+	}
+}
+
+func TestApplyHistoryDelta_RequiresAccountEmail(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	_, err = s.ApplyHistoryDelta(context.Background(), &gmail.HistoryResponse{HistoryID: "1"})
+	if err == nil {
+		t.Fatalf("expected missing account error")
 	}
 }
 
