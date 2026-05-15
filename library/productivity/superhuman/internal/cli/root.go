@@ -233,6 +233,7 @@ See README.md or the bundled SKILL.md for recipes.`,
 	}
 	rootCmd.AddCommand(newDraftsCmd(flags))
 	rootCmd.AddCommand(newRemindersCmd(flags))
+	rootCmd.AddCommand(newSnippetsCmd(flags))
 	rootCmd.AddCommand(newThreadsCmd(flags))
 	rootCmd.AddCommand(newDoctorCmd(flags))
 	rootCmd.AddCommand(newAuthCmd(flags))

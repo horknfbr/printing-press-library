@@ -223,6 +223,8 @@ func newSendCmd(flags *rootFlags) *cobra.Command {
 		remindIn  string
 		remindOn  string
 		ifNoReply bool
+		snippet   string
+		vars      []string
 	)
 
 	cmd := &cobra.Command{
@@ -267,6 +269,8 @@ duration — Ctrl-C or 'unsend' cancels.`,
 				RemindIn:  remindIn,
 				RemindOn:  remindOn,
 				IfNoReply: ifNoReply,
+				Snippet:   snippet,
+				Vars:      vars,
 			})
 		},
 	}
@@ -283,6 +287,8 @@ duration — Ctrl-C or 'unsend' cancels.`,
 	cmd.Flags().StringVar(&remindIn, "remind-in", "", "Schedule a reminder after a duration (for example 2d, 1w, 48h)")
 	cmd.Flags().StringVar(&remindOn, "remind-on", "", "Schedule a reminder at an RFC3339 timestamp")
 	cmd.Flags().BoolVar(&ifNoReply, "if-no-reply", false, "Only fire the reminder if no recipient replies")
+	cmd.Flags().StringVar(&snippet, "snippet", "", "Use a saved snippet body by name")
+	cmd.Flags().StringArrayVar(&vars, "var", nil, "Snippet variable substitution as key=value (repeatable)")
 	return cmd
 }
 
@@ -303,6 +309,8 @@ type sendCmdArgs struct {
 	RemindIn  string
 	RemindOn  string
 	IfNoReply bool
+	Snippet   string
+	Vars      []string
 }
 
 // runSend is the verifiable RunE body. Each early-return is one statement
@@ -315,7 +323,7 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 	if a.Subject == "" {
 		return usageErr(fmt.Errorf("send: --subject required"))
 	}
-	bodyText, err := resolveSendBody(cmd, a.Body, a.BodyFile, a.BodyStdin)
+	bodyText, err := resolveSendBodyOrSnippet(cmd, a)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -440,6 +448,33 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Sent. send_at=%d, draftId=%s, gmailId=%s\n", now.Unix(), draftID, gmailID)
 	return nil
+}
+
+func resolveSendBodyOrSnippet(cmd *cobra.Command, a sendCmdArgs) (string, error) {
+	if a.Snippet == "" {
+		if len(a.Vars) > 0 {
+			return "", fmt.Errorf("send: --var requires --snippet")
+		}
+		return resolveSendBody(cmd, a.Body, a.BodyFile, a.BodyStdin)
+	}
+	set := 0
+	if a.Body != "" {
+		set++
+	}
+	if a.BodyFile != "" {
+		set++
+	}
+	if a.BodyStdin {
+		set++
+	}
+	if set > 0 {
+		return "", fmt.Errorf("send: --snippet is mutually exclusive with --body, --body-file, and --body-stdin")
+	}
+	body, err := resolveSnippetBody(a.Snippet, a.Vars)
+	if err != nil {
+		return "", err
+	}
+	return body, nil
 }
 
 // resolveSendBody picks the body source per the priority bodyStdin > bodyFile
