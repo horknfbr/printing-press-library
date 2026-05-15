@@ -61,10 +61,10 @@ func writeConfigPointingAt(t *testing.T, configPath, baseURL, activeEmail string
 // accidentally swaps the type, this test catches it before any HTTP fire.
 func TestBuildDraftValue_FromToAreStrings(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      sendInputs
+		name     string
+		in       sendInputs
 		wantFrom string
-		wantTo  []string
+		wantTo   []string
 	}{
 		{
 			name: "single recipient with name",
@@ -171,6 +171,56 @@ func TestBuildDraftValue_FromToAreStrings(t *testing.T) {
 				t.Fatalf("DraftValue.to must serialize as JSON string-array, got %s", probe.To)
 			}
 		})
+	}
+}
+
+func TestBuildDraftValue_ReminderPayload(t *testing.T) {
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	reminder, err := buildSendReminder(now, "2d", "", true)
+	if err != nil {
+		t.Fatalf("buildSendReminder: %v", err)
+	}
+	dv := buildDraftValue(sendInputs{
+		FromEmail: "user@example.com",
+		To:        []string{"alice@example.com"},
+		Subject:   "Follow up",
+		Body:      "hello",
+		DraftID:   "draft0006",
+		Now:       now,
+		Reminder:  reminder,
+	})
+	if dv.Reminder == nil {
+		t.Fatalf("Reminder missing")
+	}
+	if dv.Reminder.Condition != "if-no-reply" {
+		t.Fatalf("condition = %q want if-no-reply", dv.Reminder.Condition)
+	}
+	if got, want := dv.Reminder.TriggerAt, now.Add(48*time.Hour).UnixMilli(); got != want {
+		t.Fatalf("triggerAt = %d want %d", got, want)
+	}
+}
+
+func TestBuildSendReminderValidation(t *testing.T) {
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	if _, err := buildSendReminder(now, "2d", "2026-05-20T08:00:00Z", false); err == nil {
+		t.Fatalf("expected mutually-exclusive reminder error")
+	}
+	if _, err := buildSendReminder(now, "30s", "", false); err == nil {
+		t.Fatalf("expected sub-hour reminder error")
+	}
+	r, err := buildSendReminder(now, "", "2026-05-20T08:00:00Z", false)
+	if err != nil {
+		t.Fatalf("buildSendReminder remind-on: %v", err)
+	}
+	if r.Condition != "always" {
+		t.Fatalf("default condition = %q want always", r.Condition)
+	}
+	want := time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC).UnixMilli()
+	if r.TriggerAt != want {
+		t.Fatalf("triggerAt = %d want %d", r.TriggerAt, want)
+	}
+	if _, err := buildSendReminder(now, "", "2024-01-01T00:00:00Z", false); err == nil {
+		t.Fatalf("expected past remind-on error")
 	}
 }
 
@@ -576,6 +626,64 @@ func TestSend_DryRun_NoHTTP(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("dry-run envelope missing %s, got: %s", want, stdout)
 		}
+	}
+}
+
+func TestSendDryRun_ReminderFlags(t *testing.T) {
+	configPath, tokenStorePath := withConfigPath(t)
+	seedSendStore(t, tokenStorePath, "user@example.com", "1234567890123456789")
+	writeConfigPointingAt(t, configPath, "http://unused", "user@example.com")
+
+	stdout, _, err := executeCmd(t,
+		"--config", configPath,
+		"--dry-run",
+		"send",
+		"--to", "alice@example.com",
+		"--subject", "remind",
+		"--body", "hello",
+		"--from", "user@example.com",
+		"--remind-in", "2d",
+		"--if-no-reply",
+	)
+	if err != nil {
+		t.Fatalf("dry-run reminder send: %v", err)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("parse dry-run envelope: %v\n%s", err, stdout)
+	}
+	step1 := envelope["step1"].(map[string]any)
+	body := step1["body"].(map[string]any)
+	writes := body["writes"].([]any)
+	value := writes[0].(map[string]any)["value"].(map[string]any)
+	reminder := value["reminder"].(map[string]any)
+	if reminder["condition"] != "if-no-reply" {
+		t.Fatalf("condition = %v want if-no-reply", reminder["condition"])
+	}
+	if reminder["triggerAt"].(float64) <= 0 {
+		t.Fatalf("triggerAt should be populated: %v", reminder["triggerAt"])
+	}
+}
+
+func TestSend_ReminderFlagErrors(t *testing.T) {
+	configPath, tokenStorePath := withConfigPath(t)
+	seedSendStore(t, tokenStorePath, "user@example.com", "1234567890123456789")
+	writeConfigPointingAt(t, configPath, "http://unused", "user@example.com")
+
+	_, _, err := executeCmd(t,
+		"--config", configPath,
+		"send",
+		"--to", "alice@example.com",
+		"--subject", "remind",
+		"--body", "hello",
+		"--from", "user@example.com",
+		"--remind-in", "30s",
+	)
+	if err == nil {
+		t.Fatalf("expected sub-hour reminder error")
+	}
+	if !strings.Contains(err.Error(), "at least 1h") {
+		t.Fatalf("error %q missing minimum window", err.Error())
 	}
 }
 

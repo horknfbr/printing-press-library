@@ -118,6 +118,11 @@ type draftFingerprint struct {
 	Attachments string `json:"attachments"`
 }
 
+type sendReminder struct {
+	TriggerAt int64  `json:"triggerAt"`
+	Condition string `json:"condition"`
+}
+
 // draftValue is the JSON shape the bundle's userdata.writeMessage validator
 // accepts. EVERY field below is required by the validator — omitting any of
 // them returns 400 with no useful detail (the bundle does an aggregate
@@ -125,56 +130,56 @@ type draftFingerprint struct {
 //
 // from/to/cc/bcc are STRINGS at this layer. Do not change.
 type draftValue struct {
-	ID                              string           `json:"id"`
-	ThreadID                        string           `json:"threadId"`
-	Action                          string           `json:"action"`
-	Name                            *string          `json:"name"`
-	From                            string           `json:"from"`
-	To                              []string         `json:"to"`
-	Cc                              []string         `json:"cc"`
-	Bcc                             []string         `json:"bcc"`
-	Subject                         string           `json:"subject"`
-	Body                            string           `json:"body"`
-	Snippet                         string           `json:"snippet"`
-	InReplyToRfc822ID               *string          `json:"inReplyToRfc822Id"`
-	LabelIDs                        []string         `json:"labelIds"`
-	ClientCreatedAt                 string           `json:"clientCreatedAt"`
-	Date                            string           `json:"date"`
-	Fingerprint                     draftFingerprint `json:"fingerprint"`
-	LastSessionID                   string           `json:"lastSessionId"`
-	QuotedContent                   string           `json:"quotedContent"`
-	QuotedContentInlined            bool             `json:"quotedContentInlined"`
-	References                      []string         `json:"references"`
-	Reminder                        *string          `json:"reminder"`
-	Rfc822ID                        string           `json:"rfc822Id"`
-	ScheduledFor                    *string          `json:"scheduledFor"`
-	ScheduledReplyInterruptedAt     *string          `json:"scheduledReplyInterruptedAt"`
-	SchemaVersion                   int              `json:"schemaVersion"`
-	TotalComposeSeconds             int              `json:"totalComposeSeconds"`
-	TimeZone                        string           `json:"timeZone"`
+	ID                          string           `json:"id"`
+	ThreadID                    string           `json:"threadId"`
+	Action                      string           `json:"action"`
+	Name                        *string          `json:"name"`
+	From                        string           `json:"from"`
+	To                          []string         `json:"to"`
+	Cc                          []string         `json:"cc"`
+	Bcc                         []string         `json:"bcc"`
+	Subject                     string           `json:"subject"`
+	Body                        string           `json:"body"`
+	Snippet                     string           `json:"snippet"`
+	InReplyToRfc822ID           *string          `json:"inReplyToRfc822Id"`
+	LabelIDs                    []string         `json:"labelIds"`
+	ClientCreatedAt             string           `json:"clientCreatedAt"`
+	Date                        string           `json:"date"`
+	Fingerprint                 draftFingerprint `json:"fingerprint"`
+	LastSessionID               string           `json:"lastSessionId"`
+	QuotedContent               string           `json:"quotedContent"`
+	QuotedContentInlined        bool             `json:"quotedContentInlined"`
+	References                  []string         `json:"references"`
+	Reminder                    *sendReminder    `json:"reminder"`
+	Rfc822ID                    string           `json:"rfc822Id"`
+	ScheduledFor                *string          `json:"scheduledFor"`
+	ScheduledReplyInterruptedAt *string          `json:"scheduledReplyInterruptedAt"`
+	SchemaVersion               int              `json:"schemaVersion"`
+	TotalComposeSeconds         int              `json:"totalComposeSeconds"`
+	TimeZone                    string           `json:"timeZone"`
 }
 
 // outgoingMessage is the JSON shape the bundle's /messages/send validator
 // accepts. from/to/cc/bcc are OBJECTS here, not strings — opposite of
 // draftValue.
 type outgoingMessage struct {
-	Headers            []recipientHeader `json:"headers"`
-	SuperhumanID       string            `json:"superhuman_id"`
-	Rfc822ID           string            `json:"rfc822_id"`
-	ThreadID           string            `json:"thread_id"`
-	MessageID          string            `json:"message_id"`
-	InReplyTo          *string           `json:"in_reply_to"`
-	From               addressObject     `json:"from"`
-	To                 []addressObject   `json:"to"`
-	Cc                 []addressObject   `json:"cc"`
-	Bcc                []addressObject   `json:"bcc"`
-	Subject            string            `json:"subject"`
-	HTMLBody           string            `json:"html_body"`
-	Attachments        []any             `json:"attachments"`
-	ScheduledFor       *string           `json:"scheduled_for"`
-	AbortOnReply       bool              `json:"abort_on_reply"`
-	CurrentMessageIDs  []string          `json:"current_message_ids"`
-	MailMergeRecipients []any            `json:"mail_merge_recipients"`
+	Headers             []recipientHeader `json:"headers"`
+	SuperhumanID        string            `json:"superhuman_id"`
+	Rfc822ID            string            `json:"rfc822_id"`
+	ThreadID            string            `json:"thread_id"`
+	MessageID           string            `json:"message_id"`
+	InReplyTo           *string           `json:"in_reply_to"`
+	From                addressObject     `json:"from"`
+	To                  []addressObject   `json:"to"`
+	Cc                  []addressObject   `json:"cc"`
+	Bcc                 []addressObject   `json:"bcc"`
+	Subject             string            `json:"subject"`
+	HTMLBody            string            `json:"html_body"`
+	Attachments         []any             `json:"attachments"`
+	ScheduledFor        *string           `json:"scheduled_for"`
+	AbortOnReply        bool              `json:"abort_on_reply"`
+	CurrentMessageIDs   []string          `json:"current_message_ids"`
+	MailMergeRecipients []any             `json:"mail_merge_recipients"`
 }
 
 // sendInputs captures the resolved user inputs for the send pipeline. Kept
@@ -189,6 +194,7 @@ type sendInputs struct {
 	Subject   string
 	Body      string
 	HTMLBody  bool
+	Reminder  *sendReminder
 
 	DraftID      string
 	Rfc822ID     string
@@ -214,6 +220,9 @@ func newSendCmd(flags *rootFlags) *cobra.Command {
 		from      string
 		undo      time.Duration
 		htmlBody  bool
+		remindIn  string
+		remindOn  string
+		ifNoReply bool
 	)
 
 	cmd := &cobra.Command{
@@ -255,6 +264,9 @@ duration — Ctrl-C or 'unsend' cancels.`,
 				From:      from,
 				Undo:      undo,
 				HTMLBody:  htmlBody,
+				RemindIn:  remindIn,
+				RemindOn:  remindOn,
+				IfNoReply: ifNoReply,
 			})
 		},
 	}
@@ -268,6 +280,9 @@ duration — Ctrl-C or 'unsend' cancels.`,
 	cmd.Flags().StringVar(&from, "from", "", "sender email (default: active account from 'auth use')")
 	cmd.Flags().DurationVar(&undo, "undo", 0, "delay before sending; can cancel with 'unsend' or Ctrl-C")
 	cmd.Flags().BoolVar(&htmlBody, "html", false, "treat body as raw HTML (default: wrap as plain-text <div>)")
+	cmd.Flags().StringVar(&remindIn, "remind-in", "", "Schedule a reminder after a duration (for example 2d, 1w, 48h)")
+	cmd.Flags().StringVar(&remindOn, "remind-on", "", "Schedule a reminder at an RFC3339 timestamp")
+	cmd.Flags().BoolVar(&ifNoReply, "if-no-reply", false, "Only fire the reminder if no recipient replies")
 	return cmd
 }
 
@@ -285,6 +300,9 @@ type sendCmdArgs struct {
 	From      string
 	Undo      time.Duration
 	HTMLBody  bool
+	RemindIn  string
+	RemindOn  string
+	IfNoReply bool
 }
 
 // runSend is the verifiable RunE body. Each early-return is one statement
@@ -298,6 +316,11 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 		return usageErr(fmt.Errorf("send: --subject required"))
 	}
 	bodyText, err := resolveSendBody(cmd, a.Body, a.BodyFile, a.BodyStdin)
+	if err != nil {
+		return usageErr(err)
+	}
+	now := time.Now()
+	reminder, err := buildSendReminder(now, a.RemindIn, a.RemindOn, a.IfNoReply)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -337,7 +360,6 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 	fromName := lookupAccountName(fromEmail)
 
 	// --- ID generation (KD5: strict format pre-flight) ---
-	now := time.Now()
 	draftID := auth.NewDraftID()
 	rfc822ID := auth.NewRFC822ID()
 	superhumanID := auth.NewSuperhumanID()
@@ -351,6 +373,7 @@ func runSend(cmd *cobra.Command, flags *rootFlags, a sendCmdArgs) error {
 		Subject:      a.Subject,
 		Body:         bodyText,
 		HTMLBody:     a.HTMLBody,
+		Reminder:     reminder,
 		DraftID:      draftID,
 		Rfc822ID:     rfc822ID,
 		SuperhumanID: superhumanID,
@@ -458,6 +481,79 @@ func resolveSendBody(cmd *cobra.Command, body, bodyFile string, bodyStdin bool) 
 	}
 }
 
+func buildSendReminder(now time.Time, remindIn, remindOn string, ifNoReply bool) (*sendReminder, error) {
+	if remindIn != "" && remindOn != "" {
+		return nil, fmt.Errorf("send: --remind-in and --remind-on are mutually exclusive")
+	}
+	if remindIn == "" && remindOn == "" {
+		return nil, nil
+	}
+	var trigger time.Time
+	if remindIn != "" {
+		d, err := parseReminderDuration(remindIn)
+		if err != nil {
+			return nil, fmt.Errorf("send: invalid --remind-in %q: %w", remindIn, err)
+		}
+		if d < time.Hour {
+			return nil, fmt.Errorf("send: --remind-in must be at least 1h")
+		}
+		trigger = now.Add(d)
+	} else {
+		parsed, err := parseReminderTime(now, remindOn)
+		if err != nil {
+			return nil, fmt.Errorf("send: invalid --remind-on %q: %w", remindOn, err)
+		}
+		if !parsed.After(now) {
+			return nil, fmt.Errorf("send: --remind-on must be in the future")
+		}
+		trigger = parsed
+	}
+	condition := "always"
+	if ifNoReply {
+		condition = "if-no-reply"
+	}
+	return &sendReminder{
+		TriggerAt: trigger.UnixMilli(),
+		Condition: condition,
+	}, nil
+}
+
+func parseReminderDuration(input string) (time.Duration, error) {
+	s := strings.TrimSpace(input)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	unit := s[len(s)-1]
+	if unit == 'd' || unit == 'w' {
+		n := strings.TrimSpace(s[:len(s)-1])
+		var value int
+		if _, err := fmt.Sscanf(n, "%d", &value); err != nil || value <= 0 {
+			return 0, fmt.Errorf("expected positive whole number before %c", unit)
+		}
+		if unit == 'd' {
+			return time.Duration(value) * 24 * time.Hour, nil
+		}
+		return time.Duration(value) * 7 * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
+func parseReminderTime(now time.Time, input string) (time.Time, error) {
+	s := strings.TrimSpace(input)
+	if strings.HasPrefix(s, "+") {
+		d, err := parseReminderDuration(strings.TrimPrefix(s, "+"))
+		if err != nil {
+			return time.Time{}, err
+		}
+		return now.Add(d), nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
+}
+
 // lookupAccountName reads Chrome's localStorage to find the display name for
 // the given email. The bundle stores names under "<email>:name" with the
 // value JSON-quoted (e.g., `"Matt Van Horn"`). We strip the quotes before
@@ -533,21 +629,21 @@ func buildDraftValue(in sendInputs) draftValue {
 		bccStrings[i] = e
 	}
 	dv := draftValue{
-		ID:                              in.DraftID,
-		ThreadID:                        in.DraftID,
-		Action:                          "compose",
-		Name:                            nil,
-		From:                            formatAddressString(in.FromEmail, in.FromName),
-		To:                              toStrings,
-		Cc:                              ccStrings,
-		Bcc:                             bccStrings,
-		Subject:                         in.Subject,
-		Body:                            renderBody(in.Body, in.HTMLBody),
-		Snippet:                         "",
-		InReplyToRfc822ID:               nil,
-		LabelIDs:                        []string{"DRAFT"},
-		ClientCreatedAt:                 iso,
-		Date:                            iso,
+		ID:                in.DraftID,
+		ThreadID:          in.DraftID,
+		Action:            "compose",
+		Name:              nil,
+		From:              formatAddressString(in.FromEmail, in.FromName),
+		To:                toStrings,
+		Cc:                ccStrings,
+		Bcc:               bccStrings,
+		Subject:           in.Subject,
+		Body:              renderBody(in.Body, in.HTMLBody),
+		Snippet:           "",
+		InReplyToRfc822ID: nil,
+		LabelIDs:          []string{"DRAFT"},
+		ClientCreatedAt:   iso,
+		Date:              iso,
 		Fingerprint: draftFingerprint{
 			To:          joinAddresses(in.To),
 			Cc:          joinAddresses(in.Cc),
@@ -557,7 +653,7 @@ func buildDraftValue(in sendInputs) draftValue {
 		QuotedContent:               "",
 		QuotedContentInlined:        false,
 		References:                  []string{},
-		Reminder:                    nil,
+		Reminder:                    in.Reminder,
 		Rfc822ID:                    in.Rfc822ID,
 		ScheduledFor:                nil,
 		ScheduledReplyInterruptedAt: nil,
@@ -619,21 +715,21 @@ func buildOutgoingMessage(in sendInputs) outgoingMessage {
 		bccAddrs[i] = addressObject{Email: e}
 	}
 	om := outgoingMessage{
-		Headers:      outgoingMessageHeaders(in.SuperhumanID, in.DraftID, in.DraftID),
-		SuperhumanID: in.SuperhumanID,
-		Rfc822ID:     in.Rfc822ID,
-		ThreadID:     in.DraftID,
-		MessageID:    in.DraftID,
-		InReplyTo:    nil,
-		From:         addressObject{Email: in.FromEmail, Name: senderDisplayName(in.FromEmail, in.FromName)},
-		To:           toAddrs,
-		Cc:           ccAddrs,
-		Bcc:          bccAddrs,
-		Subject:      in.Subject,
-		HTMLBody:     renderBody(in.Body, in.HTMLBody),
-		Attachments:  []any{},
-		ScheduledFor: nil,
-		AbortOnReply: false,
+		Headers:             outgoingMessageHeaders(in.SuperhumanID, in.DraftID, in.DraftID),
+		SuperhumanID:        in.SuperhumanID,
+		Rfc822ID:            in.Rfc822ID,
+		ThreadID:            in.DraftID,
+		MessageID:           in.DraftID,
+		InReplyTo:           nil,
+		From:                addressObject{Email: in.FromEmail, Name: senderDisplayName(in.FromEmail, in.FromName)},
+		To:                  toAddrs,
+		Cc:                  ccAddrs,
+		Bcc:                 bccAddrs,
+		Subject:             in.Subject,
+		HTMLBody:            renderBody(in.Body, in.HTMLBody),
+		Attachments:         []any{},
+		ScheduledFor:        nil,
+		AbortOnReply:        false,
 		CurrentMessageIDs:   []string{in.DraftID},
 		MailMergeRecipients: []any{},
 	}
@@ -970,13 +1066,13 @@ func printSendDryRun(cmd *cobra.Command, in sendInputs, googleID string) error {
 		"content_type": "application/json",
 	}
 	envelope := map[string]any{
-		"dry_run":      true,
-		"draft_id":     in.DraftID,
-		"rfc822_id":    in.Rfc822ID,
+		"dry_run":       true,
+		"draft_id":      in.DraftID,
+		"rfc822_id":     in.Rfc822ID,
 		"superhuman_id": in.SuperhumanID,
-		"step1":        step1,
-		"step2":        step2,
-		"step3":        step3,
+		"step1":         step1,
+		"step2":         step2,
+		"step3":         step3,
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
