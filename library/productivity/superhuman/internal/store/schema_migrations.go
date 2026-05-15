@@ -90,13 +90,3 @@ func schemaV3RebuildSQL() []string {
 	}
 }
 
-// schemaV3MigrationSQL is kept as a compatibility shim that returns the
-// union of idempotent + rebuild statements. Direct callers should prefer
-// the two split helpers so the bulk rebuild can be gated on a real
-// version transition. Will be removed once the only call site (store.go)
-// is migrated to the version-gated helpers.
-func schemaV3MigrationSQL() []string {
-	out := schemaV3IdempotentSQL()
-	out = append(out, schemaV3RebuildSQL()...)
-	return out
-}

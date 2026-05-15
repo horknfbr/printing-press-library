@@ -213,6 +213,18 @@ func runGmailHistoryRefreshImpl(ctx context.Context, flags *rootFlags) (GmailHis
 	}, nil
 }
 
+// runGmailHistoryFallbackBootstrap is the recovery path that fires when
+// Gmail's startHistoryId returns HistoryExpiredError. It re-bootstraps a
+// small window of recent messages so the next watch/refresh has a valid
+// starting point.
+//
+// PATCH(greptile-fallback-history-max): roll up the MAX historyID across
+// the bootstrapped folders (same pattern as the primary runBootstrap
+// path) instead of overwriting latestHistory with the last folder's
+// value. Sequential assignment ended on "sent"'s historyID, which is
+// typically lower than "inbox"'s, leaving the saved checkpoint below the
+// real head and causing the next watch to replay already-processed
+// inbox events.
 func runGmailHistoryFallbackBootstrap(ctx context.Context, flags *rootFlags, gc *gmail.Client, db *store.Store, accountEmail string) (int, string, error) {
 	total := 0
 	latestHistory := ""
@@ -220,9 +232,7 @@ func runGmailHistoryFallbackBootstrap(ctx context.Context, flags *rootFlags, gc 
 	for _, folder := range []string{"inbox", "sent"} {
 		count, historyID, err := bootstrapFolder(ctx, cmd.command(), flags, gc, db, accountEmail, folder, 50)
 		total += count
-		if historyID != "" {
-			latestHistory = historyID
-		}
+		latestHistory = maxHistoryID(latestHistory, historyID)
 		if err != nil {
 			return total, latestHistory, err
 		}
