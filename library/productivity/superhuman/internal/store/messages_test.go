@@ -183,6 +183,33 @@ func TestApplyHistoryDelta_RequiresAccountEmail(t *testing.T) {
 	}
 }
 
+func TestGetMessageByRFC822(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.UpsertGmailMessages(context.Background(), []StoredMessage{{
+		ID: "msg-rfc", AccountEmail: "user@example.com", RFC822ID: "<msg@example.com>", LabelIDs: []string{"INBOX"},
+	}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	msg, err := s.GetMessageByRFC822(context.Background(), "user@example.com", "<msg@example.com>")
+	if err != nil {
+		t.Fatalf("GetMessageByRFC822: %v", err)
+	}
+	if msg == nil || msg.ID != "msg-rfc" || len(msg.LabelIDs) != 1 {
+		t.Fatalf("message = %+v", msg)
+	}
+	missing, err := s.GetMessageByRFC822(context.Background(), "user@example.com", "<missing@example.com>")
+	if err != nil {
+		t.Fatalf("GetMessageByRFC822 missing: %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("missing = %+v want nil", missing)
+	}
+}
+
 func TestSaveHistoryStateAndClearMessagesForAccount(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
 	if err != nil {

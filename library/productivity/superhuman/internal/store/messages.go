@@ -197,6 +197,41 @@ func (s *Store) GetHistoryState(ctx context.Context, accountEmail string) (*Hist
 	return &row, nil
 }
 
+// GetMessageByRFC822 returns a locally stored message by its RFC822 Message-ID.
+func (s *Store) GetMessageByRFC822(ctx context.Context, accountEmail, rfc822ID string) (*StoredMessage, error) {
+	var msg StoredMessage
+	var labelsRaw, data string
+	err := s.db.QueryRowContext(ctx, `SELECT "id", "thread_id", "account_email", "label_ids", "from", "to", "cc", "subject", "snippet", "body_plain", "body_html", "rfc822_id", "history_id", "internal_date", "data"
+		FROM "messages"
+		WHERE "rfc822_id" = ? AND (? = '' OR "account_email" = ?)
+		LIMIT 1`, rfc822ID, accountEmail, accountEmail).Scan(
+		&msg.ID,
+		&msg.ThreadID,
+		&msg.AccountEmail,
+		&labelsRaw,
+		&msg.From,
+		&msg.To,
+		&msg.Cc,
+		&msg.Subject,
+		&msg.Snippet,
+		&msg.BodyPlain,
+		&msg.BodyHTML,
+		&msg.RFC822ID,
+		&msg.HistoryID,
+		&msg.InternalDate,
+		&data,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get message by rfc822: %w", err)
+	}
+	_ = json.Unmarshal([]byte(labelsRaw), &msg.LabelIDs)
+	msg.Data = json.RawMessage(data)
+	return &msg, nil
+}
+
 // HistoryApplyResult summarizes one applied Gmail history delta.
 type HistoryApplyResult struct {
 	Added         int

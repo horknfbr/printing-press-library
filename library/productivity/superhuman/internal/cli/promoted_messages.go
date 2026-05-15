@@ -39,6 +39,7 @@ Superhuman backend pipeline lives there, not under 'messages').`,
 		},
 	}
 	cmd.AddCommand(newMessagesGetCmd(flags))
+	cmd.AddCommand(newMessagesGetByRFC822Cmd(flags))
 	cmd.AddCommand(newMessagesListCmd(flags))
 	cmd.AddCommand(newMessagesGetAttachmentCmd(flags))
 	cmd.AddCommand(newMessagesReadStatusCmd(flags))
