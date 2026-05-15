@@ -362,7 +362,15 @@ func (c *Client) dryRun(method, targetURL, path string, params map[string]string
 		}
 	}
 	if authHeader != "" {
-		fmt.Fprintf(os.Stderr, "  %s: %s\n", "Authorization", maskToken(authHeader))
+		// PATCH(dryrun-auth-header-label): mirror the live-request routing so
+		// dry-run output names the actual header the request would use. OpenArt's
+		// cookie-based auth sets a `Cookie:` header (not `Authorization:`) when
+		// the stored value looks like a cookie string (greptile P2).
+		headerName := "Authorization"
+		if looksLikeCookieString(authHeader) {
+			headerName = "Cookie"
+		}
+		fmt.Fprintf(os.Stderr, "  %s: %s\n", headerName, maskToken(authHeader))
 	}
 	fmt.Fprintf(os.Stderr, "\n(dry run - no request sent)\n")
 	return json.RawMessage(`{"dry_run": true}`), 0, nil

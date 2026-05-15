@@ -550,6 +550,7 @@ func TestMigrate_AddsColumnsOnUpgrade_Credits(t *testing.T) {
 		"amount",
 		"balance_before",
 		"balance_after",
+		"first_seen_at",
 	} {
 		if !hasColumn[want] {
 			t.Fatalf("%s column missing from credits after migrate", want)

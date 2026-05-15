@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "applied_at": "2026-05-15",
+  "base_run_id": "20260513-152641",
+  "base_printing_press_version": "4.5.1",
+  "patches": [
+    {
+      "id": "refresh-cookie-domain",
+      "summary": "Hardcode the openart.ai cookie domain in refreshStoredBrowserCookies so `auth refresh` actually reaches the extractor pipeline.",
+      "reason": "The variable was initialized to the empty string and the function immediately returned 'no cookie domain configured', leaving the rest of the function as dead code. Every user invoking `auth refresh` saw the same misleading error (greptile P1).",
+      "files": [
+        "internal/cli/auth.go"
+      ],
+      "validated_outcome": "Build passes. `auth refresh` now invokes the cookie extractor against openart.ai cookies."
+    },
+    {
+      "id": "dryrun-auth-header-label",
+      "summary": "Mirror the live-request header-routing logic in --dry-run output so cookie-shaped auth is labeled Cookie, not Authorization.",
+      "reason": "OpenArt's cookie-based auth sets a `Cookie:` header on the live request (via looksLikeCookieString), but the dry-run printout hardcoded `Authorization:`, so developers debugging requests saw misleading output (greptile P2).",
+      "files": [
+        "internal/client/client.go"
+      ],
+      "validated_outcome": "Dry-run output now labels the auth header to match what the request actually sends."
+    },
+    {
+      "id": "credits-first-seen-at",
+      "summary": "Add a first_seen_at column to the credits typed table and bucket/filter credits burn + forecast on it instead of synced_at.",
+      "reason": "The captured /credits/logs response shape has no per-record timestamp (validated against the manuscript's traffic-analysis credit_contract). The previous credits commands used synced_at, which is rewritten on every full resync, so credits burn --by day collapsed every historical spend into the sync-day bucket and credits forecast's 28-day window matched every record on a first sync. The new first_seen_at column captures the first observation timestamp (preserved across ON CONFLICT updates and backfilled to synced_at for legacy rows); going forward each new spend records an accurate consume-time proxy because the autorefresh path syncs on every CLI invocation (greptile P1 x2).",
+      "files": [
+        "internal/store/store.go",
+        "internal/store/schema_version_test.go",
+        "internal/cli/credits_novel.go"
+      ],
+      "validated_outcome": "go test ./... passes. credits burn buckets by observation date, credits forecast's 28-day window only matches recently-observed spends. Migration is idempotent and backfills pre-existing rows from synced_at."
+    },
+    {
+      "id": "drop-cli-skills-mirror",
+      "summary": "Remove the manually-committed cli-skills/pp-openart/SKILL.md mirror.",
+      "reason": "AGENTS.md (Files NOT in the PR) requires the cli-skills mirror to stay out of new-CLI PRs; tools/generate-skills regenerates it post-merge from library/ai/openart/SKILL.md (greptile P2).",
+      "files": [
+        "cli-skills/pp-openart/SKILL.md"
+      ]
+    }
+  ]
+}

@@ -220,6 +220,13 @@ func (s *Store) backfillColumns(ctx context.Context, conn *sql.Conn) error {
 		{table: "credits", column: "amount", decl: "INTEGER"},
 		{table: "credits", column: "balance_before", decl: "INTEGER"},
 		{table: "credits", column: "balance_after", decl: "INTEGER"},
+		// PATCH(credits-first-seen-at): track the first-observation timestamp
+		// separately from synced_at so credits burn/forecast can bucket by
+		// when each record landed locally (a close proxy for spend time on
+		// post-install activity) rather than by the last full-resync timestamp.
+		// Existing rows get backfilled to their synced_at by the
+		// post-add UPDATE below.
+		{table: "credits", column: "first_seen_at", decl: "DATETIME"},
 		{table: "history", column: "user_id", decl: "TEXT"},
 		{table: "history", column: "capability_id", decl: "TEXT"},
 		{table: "history", column: "request_form_id", decl: "TEXT"},
@@ -260,6 +267,25 @@ func (s *Store) backfillColumns(ctx context.Context, conn *sql.Conn) error {
 		if err := s.ensureColumn(ctx, conn, c.table, c.column, c.decl); err != nil {
 			return err
 		}
+	}
+	// PATCH(credits-first-seen-at-backfill): rows present before
+	// first_seen_at was added would have a NULL value; copy synced_at as
+	// the best available proxy so pre-existing data still buckets and
+	// filters cleanly. Idempotent. Guard with a table-existence check the
+	// same way ensureColumn does so fresh DBs (where credits is created
+	// later in the migration sequence) don't trip "no such table".
+	var credits string
+	err := conn.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='credits'`,
+	).Scan(&credits)
+	if err == nil && credits == "credits" {
+		if _, err := conn.ExecContext(ctx,
+			`UPDATE "credits" SET first_seen_at = synced_at WHERE first_seen_at IS NULL`,
+		); err != nil {
+			return fmt.Errorf("backfill credits.first_seen_at: %w", err)
+		}
+	} else if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("checking credits table for first_seen_at backfill: %w", err)
 	}
 	return nil
 }
@@ -312,7 +338,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			"type" TEXT,
 			"amount" INTEGER,
 			"balance_before" INTEGER,
-			"balance_after" INTEGER
+			"balance_after" INTEGER,
+			"first_seen_at" DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS "history" (
 			"id" TEXT PRIMARY KEY,
@@ -867,18 +894,25 @@ func lookupFieldValue(obj map[string]any, snakeKey string) any {
 // Splitting this out lets UpsertBatch dispatch typed inserts per item without
 // opening a per-item transaction.
 func (s *Store) upsertCreditsTx(tx *sql.Tx, id string, obj map[string]any, data json.RawMessage) error {
+	// PATCH(credits-first-seen-at): first_seen_at records the first time
+	// the local store observed each id. Subsequent ON CONFLICT updates
+	// refresh synced_at and the typed fields but explicitly preserve
+	// first_seen_at so credits burn/forecast can bucket on a stable
+	// observation timestamp instead of the latest resync timestamp.
+	now := time.Now()
 	if _, err := tx.Exec(
-		`INSERT INTO "credits" ("id", "data", "synced_at", "sequence_id", "type", "amount", "balance_before", "balance_after")
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO "credits" ("id", "data", "synced_at", "sequence_id", "type", "amount", "balance_before", "balance_after", "first_seen_at")
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT("id") DO UPDATE SET "data" = excluded."data", "synced_at" = excluded."synced_at", "sequence_id" = excluded."sequence_id", "type" = excluded."type", "amount" = excluded."amount", "balance_before" = excluded."balance_before", "balance_after" = excluded."balance_after"`,
 		id,
 		string(data),
-		time.Now(),
+		now,
 		lookupFieldValue(obj, "sequence_id"),
 		lookupFieldValue(obj, "type"),
 		lookupFieldValue(obj, "amount"),
 		lookupFieldValue(obj, "balance_before"),
 		lookupFieldValue(obj, "balance_after"),
+		now,
 	); err != nil {
 		return fmt.Errorf("insert into credits: %w", err)
 	}

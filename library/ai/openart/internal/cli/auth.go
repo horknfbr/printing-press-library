@@ -402,10 +402,11 @@ func waitForCookieRefreshBrowser(cmd *cobra.Command, flags *rootFlags, targetURL
 	fmt.Fprintln(w)
 }
 func refreshStoredBrowserCookies(cfg *config.Config, w io.Writer) error {
-	domain := ""
-	if domain == "" {
-		return fmt.Errorf("no cookie domain configured")
-	}
+	// PATCH(refresh-cookie-domain): openart-pp-cli's cookie auth always targets
+	// openart.ai; leaving the domain blank left every `auth refresh` invocation
+	// hitting the early-return error path with the entire extractor pipeline
+	// below as dead code (greptile P1).
+	const domain = "openart.ai"
 
 	cookies, err := extractLiveCookies(domain)
 	if err != nil || cookies == "" {

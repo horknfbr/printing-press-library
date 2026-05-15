@@ -95,9 +95,19 @@ Run 'openart-pp-cli sync' first to populate the local store.`,
 			}
 			defer db.Close()
 
+			// PATCH(credits-bucket-by-first-seen-at): bucket and filter
+			// on first_seen_at - the first time the local store observed
+			// each credit record - instead of synced_at, which is bumped
+			// on every full resync and would collapse historical spends
+			// into the resync-day bucket. The captured /credits/logs
+			// contract has no per-record timestamp, so first_seen_at is
+			// the closest local proxy for spend time. New records get an
+			// accurate first_seen_at within seconds of the consume event
+			// because the autorefresh path syncs on every CLI invocation
+			// (greptile P1).
 			rows, err := db.QueryContext(cmd.Context(),
 				`SELECT amount, json_extract(data, '$.reference.businessType') AS business,
-				 synced_at FROM credits WHERE type = 'CONSUME'`)
+				 first_seen_at FROM credits WHERE type = 'CONSUME'`)
 			if err != nil {
 				return fmt.Errorf("query credits: %w", err)
 			}
@@ -204,9 +214,14 @@ live balance from /suite/api/user/my-info to estimate weeks of runway.`,
 			defer db.Close()
 
 			cutoff := time.Now().Add(-28 * 24 * time.Hour)
+			// PATCH(credits-forecast-first-seen-at): anchor the 28-day
+			// burn window on first_seen_at (when the local store first
+			// observed the consume event) rather than synced_at, which
+			// is rewritten on every resync and inflates the window to
+			// "everything ever synced" on a full historical sync.
 			row := db.QueryRowContext(cmd.Context(),
 				`SELECT COALESCE(SUM(-amount), 0), COUNT(*)
-				 FROM credits WHERE type = 'CONSUME' AND synced_at >= ?`,
+				 FROM credits WHERE type = 'CONSUME' AND first_seen_at >= ?`,
 				cutoff.Format("2006-01-02 15:04:05"))
 			var spent int64
 			var events int64
