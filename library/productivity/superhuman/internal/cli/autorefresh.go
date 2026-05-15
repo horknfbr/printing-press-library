@@ -4,8 +4,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,163 +17,332 @@ import (
 
 const autoRefreshEnvVar = "SUPERHUMAN_NO_AUTO_REFRESH"
 
-var autoRefreshSkipCommands = []string{
-	"sync",
-	"auth",
-	"doctor",
-	"help",
-	"version",
-	"completion",
-	"agent-context",
-	"profile",
-	"feedback",
-	"which",
-	"bootstrap",
+// PATCH(superhuman-autorefresh-canonical): mirror the granola PR #571
+// auto-refresh dispatcher shape so published CLIs share one mental model.
+// The hook is best-effort: refresh failures are rendered in the provenance
+// line and the user's requested command still runs.
+
+var noRefreshCommands = map[string]struct{}{
+	"sync":          {},
+	"auth":          {},
+	"doctor":        {},
+	"help":          {},
+	"version":       {},
+	"completion":    {},
+	"agent-context": {},
+	"profile":       {},
+	"feedback":      {},
+	"which":         {},
 }
 
-type autoRefreshResult struct {
-	Surface      string
-	Status       string
-	Duration     time.Duration
-	RowsAffected int
-	HistoryID    string
-	Err          error
+const (
+	refreshSurfaceCache = "cache"
+	refreshSurfaceGmail = "gmail"
+)
+
+type refreshPlan struct {
+	cache bool
+	gmail bool
 }
 
-type autoRefreshSummary struct {
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	Results      []autoRefreshResult
-	Skipped      bool
-	SkipReason   string
-	DeltaApplied int
-	HistoryID    string
+func (p refreshPlan) empty() bool { return !p.cache && !p.gmail }
+
+type refreshResult struct {
+	surface  string
+	ok       bool
+	rows     int
+	duration time.Duration
+	err      error
+	note     string
 }
 
-func (s autoRefreshSummary) meta() map[string]any {
-	return map[string]any{
-		"source":               "local",
-		"synced_at":            s.FinishedAt.UTC().Format(time.RFC3339Nano),
-		"history_id":           s.HistoryID,
-		"delta_polled_ms_ago":  0,
-		"delta_applied":        s.DeltaApplied,
-		"staleness_seconds":    0,
-		"auto_refresh_skipped": s.Skipped,
-		"skip_reason":          s.SkipReason,
+var runAutoRefresh = runAutoRefreshImpl
+
+func runAutoRefreshImpl(cmd *cobra.Command, flags *rootFlags) {
+	if cmd == nil || flags == nil {
+		return
+	}
+	if shouldSkipAutoRefresh(cmd) {
+		setAutoRefreshMeta(flags, nil, true, "command")
+		return
+	}
+	if shouldDeferAutoRefreshForMutation(cmd) {
+		setAutoRefreshMeta(flags, nil, true, "mutation")
+		return
+	}
+	if autoRefreshOptedOut(cmd, flags) {
+		setAutoRefreshMeta(flags, nil, true, autoRefreshOptOutReason(cmd, flags))
+		return
+	}
+	plan := detectRefreshPlan(flags)
+	if plan.empty() {
+		setAutoRefreshMeta(flags, nil, false, "")
+		return
+	}
+
+	ctx, cancel := autoRefreshContext(cmd.Context(), flags.timeout)
+	defer cancel()
+
+	results := plan.run(ctx, flags)
+	setAutoRefreshMeta(flags, results, false, "")
+	if shouldEmitProvenance(flags, cmd) {
+		emitProvenanceLine(cmd.ErrOrStderr(), results)
 	}
 }
 
-func runAutoRefresh(cmd *cobra.Command, flags *rootFlags) autoRefreshSummary {
-	summary := autoRefreshSummary{StartedAt: time.Now()}
-	if reason, skip := autoRefreshSkipReason(cmd, flags); skip {
-		summary.Skipped = true
-		summary.SkipReason = reason
-		summary.FinishedAt = time.Now()
-		return summary
+func autoRefreshContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
 	}
-
-	results := []autoRefreshResult{
-		runGmailHistoryRefresh(cmd, flags),
-		runSuperhumanBackendRefresh(cmd, flags),
+	if timeout <= 0 {
+		return context.WithCancel(parent)
 	}
-	summary.Results = results
-	for _, result := range results {
-		if result.Err == nil {
-			summary.DeltaApplied += result.RowsAffected
-			if result.HistoryID != "" {
-				summary.HistoryID = result.HistoryID
-			}
-		}
+	if _, hasDeadline := parent.Deadline(); hasDeadline {
+		return context.WithCancel(parent)
 	}
-	summary.FinishedAt = time.Now()
-	if shouldPrintAutoRefreshProvenance(cmd, flags) {
-		fmt.Fprintln(cmd.ErrOrStderr(), formatAutoRefreshProvenance(results))
-	}
-	return summary
+	return context.WithTimeout(parent, timeout)
 }
 
-func autoRefreshSkipReason(cmd *cobra.Command, flags *rootFlags) (string, bool) {
-	if shouldSkipAutoRefreshCommand(cmd) {
-		return "command", true
-	}
-	noRefreshFlag := cmd.Root().PersistentFlags().Lookup("no-refresh")
-	if noRefreshFlag != nil && noRefreshFlag.Changed {
-		if flags.noRefresh {
-			return "flag", true
-		}
-		return "", false
-	}
-	if flags.noRefresh {
-		return "profile", true
-	}
-	if envBool(os.Getenv(autoRefreshEnvVar)) {
-		return "env", true
-	}
-	return "", false
-}
-
-func shouldSkipAutoRefreshCommand(cmd *cobra.Command) bool {
-	skip := map[string]bool{}
-	for _, name := range autoRefreshSkipCommands {
-		skip[name] = true
-	}
+func shouldSkipAutoRefresh(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
-		if skip[c.Name()] {
+		if _, skip := noRefreshCommands[c.Name()]; skip {
 			return true
 		}
 	}
 	return false
 }
 
-func shouldPrintAutoRefreshProvenance(cmd *cobra.Command, flags *rootFlags) bool {
+func shouldDeferAutoRefreshForMutation(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "send", "unsend":
+			return true
+		}
+	}
+	return false
+}
+
+func autoRefreshOptedOut(cmd *cobra.Command, flags *rootFlags) bool {
+	if flagChanged(cmd, "no-refresh") {
+		return flags.noRefresh
+	}
+	if flags.profileNoRefreshSet {
+		return flags.profileNoRefresh
+	}
+	if flags.noRefresh {
+		return true
+	}
+	return envBoolish(os.Getenv(autoRefreshEnvVar))
+}
+
+func autoRefreshOptOutReason(cmd *cobra.Command, flags *rootFlags) string {
+	if flagChanged(cmd, "no-refresh") && flags.noRefresh {
+		return "flag"
+	}
+	if flags.profileNoRefreshSet && flags.profileNoRefresh {
+		return "profile"
+	}
+	if flags.noRefresh {
+		return "profile"
+	}
+	if envBoolish(os.Getenv(autoRefreshEnvVar)) {
+		return "env"
+	}
+	return ""
+}
+
+func flagChanged(cmd *cobra.Command, name string) bool {
+	if cmd == nil {
+		return false
+	}
+	root := cmd.Root()
+	if root == nil {
+		root = cmd
+	}
+	if f := root.PersistentFlags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	if f := cmd.InheritedFlags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	return false
+}
+
+func envBoolish(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+func envBool(v string) bool {
+	return envBoolish(v)
+}
+
+func parseAutoRefreshBool(v string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true, true
+	case "0", "false", "no":
+		return false, true
+	}
+	return false, false
+}
+
+func captureAutoRefreshProfile(flags *rootFlags, cmd *cobra.Command, profile *Profile) error {
+	flags.profileNoRefreshSet = false
+	flags.profileNoRefresh = false
+	if profile == nil || profile.Values == nil || flagChanged(cmd, "no-refresh") {
+		return nil
+	}
+	value, ok := profile.Values["no-refresh"]
+	if !ok {
+		return nil
+	}
+	parsed, valid := parseAutoRefreshBool(value)
+	if !valid {
+		return fmt.Errorf("applying profile value no-refresh=%q: expected boolean", value)
+	}
+	flags.profileNoRefreshSet = true
+	flags.profileNoRefresh = parsed
+	return nil
+}
+
+var detectRefreshPlan = detectRefreshPlanImpl
+
+func detectRefreshPlanImpl(flags *rootFlags) refreshPlan {
+	return refreshPlan{
+		cache: superhumanAuthConfigured(flags),
+		gmail: gmailAuthConfigured(flags),
+	}
+}
+
+func (p refreshPlan) run(ctx context.Context, flags *rootFlags) []refreshResult {
+	var out []refreshResult
+	if p.cache {
+		res, err := runSuperhumanBackendRefresh(ctx, flags)
+		out = append(out, refreshResult{
+			surface:  refreshSurfaceCache,
+			ok:       err == nil,
+			rows:     res.TotalRows(),
+			duration: res.Duration,
+			err:      err,
+		})
+	}
+	if p.gmail {
+		res, err := runGmailHistoryRefresh(ctx, flags)
+		out = append(out, refreshResult{
+			surface:  refreshSurfaceGmail,
+			ok:       err == nil,
+			rows:     res.TotalRows(),
+			duration: res.Duration,
+			err:      err,
+			note:     res.Fallback,
+		})
+	}
+	return out
+}
+
+func shouldEmitProvenance(flags *rootFlags, _ *cobra.Command) bool {
 	if flags.agent || flags.asJSON || flags.compact || flags.quiet {
 		return false
 	}
-	return isTerminal(cmd.ErrOrStderr())
+	return stderrIsTerminal()
 }
 
-func formatAutoRefreshProvenance(results []autoRefreshResult) string {
+var stderrIsTerminal = func() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+func emitProvenanceLine(w io.Writer, results []refreshResult) {
+	if len(results) == 0 {
+		return
+	}
 	parts := make([]string, 0, len(results))
-	for _, result := range results {
-		status := result.Status
-		if status == "" {
-			status = "ok"
-		}
-		if result.Err != nil {
-			status = "failed"
-		}
-		detail := fmt.Sprintf("%s=%s (%dms", result.Surface, status, result.Duration.Milliseconds())
-		if result.RowsAffected != 0 {
-			detail += fmt.Sprintf(", %d rows", result.RowsAffected)
-		}
-		if result.Err != nil {
-			detail += fmt.Sprintf(", %s", compactErr(result.Err))
-		}
-		detail += ")"
-		parts = append(parts, detail)
+	for _, r := range results {
+		parts = append(parts, formatRefreshFragment(r))
 	}
-	if len(parts) == 0 {
-		return "auto-refresh: skipped"
-	}
-	return "auto-refresh: " + strings.Join(parts, "  ")
+	fmt.Fprintln(w, "auto-refresh: "+strings.Join(parts, "  "))
 }
 
-func compactErr(err error) string {
+func formatRefreshFragment(r refreshResult) string {
+	if r.ok {
+		extra := ""
+		if r.note != "" {
+			extra = ", fallback=" + r.note
+		}
+		return fmt.Sprintf("%s=ok (%s, %d rows%s)", r.surface, formatRefreshDuration(r.duration), r.rows, extra)
+	}
+	if r.err == nil {
+		return fmt.Sprintf("%s=failed (%s)", r.surface, formatRefreshDuration(r.duration))
+	}
+	return fmt.Sprintf("%s=failed (%s)", r.surface, compactErr(r.err))
+}
+
+func formatRefreshDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+func shortErr(err error) string {
 	if err == nil {
 		return ""
 	}
-	msg := strings.ReplaceAll(err.Error(), "\n", " ")
-	if len(msg) > 96 {
-		msg = msg[:93] + "..."
+	msg := err.Error()
+	if idx := strings.IndexAny(msg, "\n\r"); idx >= 0 {
+		msg = msg[:idx]
+	}
+	if len(msg) > 80 {
+		msg = msg[:77] + "..."
 	}
 	return msg
 }
 
-func envBool(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
+func compactErr(err error) string {
+	msg := shortErr(err)
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized") {
+		return "run 'auth login --chrome' to re-authenticate"
+	}
+	return msg
+}
+
+func sortedNoRefreshCommands() []string {
+	out := make([]string, 0, len(noRefreshCommands))
+	for k := range noRefreshCommands {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func setAutoRefreshMeta(flags *rootFlags, results []refreshResult, skipped bool, reason string) {
+	if flags == nil {
+		return
+	}
+	total := 0
+	for _, r := range results {
+		if r.ok {
+			total += r.rows
+		}
+	}
+	flags.freshnessMeta = map[string]any{
+		"source":               "local",
+		"synced_at":            time.Now().UTC().Format(time.RFC3339Nano),
+		"delta_polled_ms_ago":  0,
+		"delta_applied":        total,
+		"staleness_seconds":    0,
+		"auto_refresh_skipped": skipped,
+		"skip_reason":          reason,
 	}
 }

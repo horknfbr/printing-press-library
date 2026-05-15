@@ -11,12 +11,49 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/auth"
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/gmail"
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/store"
 )
+
+func TestGmailAuthConfigured(t *testing.T) {
+	configPath, tokenStorePath := withConfigPath(t)
+	writeConfigPointingAt(t, configPath, "http://unused", "user@example.com")
+	if gmailAuthConfigured(&rootFlags{configPath: configPath}) {
+		t.Fatal("gmailAuthConfigured should be false before token store is seeded")
+	}
+	seedGmailAccount(t, tokenStorePath, "user@example.com")
+	if !gmailAuthConfigured(&rootFlags{configPath: configPath}) {
+		t.Fatal("gmailAuthConfigured should be true with active Gmail account")
+	}
+}
+
+func TestSuperhumanAuthConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUPERHUMAN_JWT", "")
+	if superhumanAuthConfigured(&rootFlags{configPath: configPathUnder(t, home)}) {
+		t.Fatal("superhumanAuthConfigured should be false with no auth")
+	}
+	t.Setenv("SUPERHUMAN_JWT", "jwt-test")
+	if !superhumanAuthConfigured(&rootFlags{configPath: configPathUnder(t, home)}) {
+		t.Fatal("superhumanAuthConfigured should be true with SUPERHUMAN_JWT")
+	}
+}
+
+func TestBackendSyncResult_TotalRows(t *testing.T) {
+	r := BackendSyncResult{TotalRecords: 42}
+	if got := r.TotalRows(); got != 42 {
+		t.Fatalf("TotalRows() = %d want 42", got)
+	}
+}
+
+func TestGmailHistoryRefreshResult_TotalRows(t *testing.T) {
+	r := GmailHistoryRefreshResult{RowsAffected: 7}
+	if got := r.TotalRows(); got != 7 {
+		t.Fatalf("TotalRows() = %d want 7", got)
+	}
+}
 
 func TestRunGmailHistoryRefresh_AppliesDelta(t *testing.T) {
 	home := t.TempDir()
@@ -50,29 +87,24 @@ func TestRunGmailHistoryRefresh_AppliesDelta(t *testing.T) {
 	gmail.BaseURL = srv.URL
 	t.Cleanup(func() { gmail.BaseURL = origBaseURL })
 
-	flags := &rootFlags{configPath: configPath}
-	cmd := &cobra.Command{Use: "threads"}
-	result := runGmailHistoryRefresh(cmd, flags)
-	if result.Err != nil {
-		t.Fatalf("runGmailHistoryRefresh: %v", result.Err)
+	result, err := runGmailHistoryRefreshImpl(t.Context(), &rootFlags{configPath: configPath})
+	if err != nil {
+		t.Fatalf("runGmailHistoryRefresh: %v", err)
 	}
-	if result.Status != "ok" || result.RowsAffected != 1 || result.HistoryID != "102" {
-		t.Fatalf("result = %+v, want ok/1/102", result)
+	if result.RowsAffected != 1 || result.HistoryID != "102" {
+		t.Fatalf("result = %+v, want rows=1 history=102", result)
 	}
 }
 
 func TestRunGmailHistoryRefresh_NoActiveAccountSkips(t *testing.T) {
 	configPath, _ := withConfigPath(t)
 	writeConfigPointingAt(t, configPath, "http://unused", "")
-	flags := &rootFlags{configPath: configPath}
-	cmd := &cobra.Command{Use: "threads"}
-
-	result := runGmailHistoryRefresh(cmd, flags)
-	if result.Err != nil {
-		t.Fatalf("missing auth should skip, got err: %v", result.Err)
+	result, err := runGmailHistoryRefreshImpl(t.Context(), &rootFlags{configPath: configPath})
+	if err != nil {
+		t.Fatalf("missing auth should skip, got err: %v", err)
 	}
-	if result.Status != "skipped" {
-		t.Fatalf("status = %q want skipped", result.Status)
+	if result.RowsAffected != 0 || result.HistoryID != "" {
+		t.Fatalf("result = %+v want empty skip result", result)
 	}
 }
 
@@ -121,14 +153,12 @@ func TestRunGmailHistoryRefresh_ExpiredHistoryFallback(t *testing.T) {
 	gmail.BaseURL = srv.URL
 	t.Cleanup(func() { gmail.BaseURL = origBaseURL })
 
-	flags := &rootFlags{configPath: configPath}
-	cmd := &cobra.Command{Use: "threads"}
-	result := runGmailHistoryRefresh(cmd, flags)
-	if result.Err != nil {
-		t.Fatalf("expired history fallback should succeed: %v", result.Err)
+	result, err := runGmailHistoryRefreshImpl(t.Context(), &rootFlags{configPath: configPath})
+	if err != nil {
+		t.Fatalf("expired history fallback should succeed: %v", err)
 	}
-	if result.Status != "ok" {
-		t.Fatalf("status = %q want ok", result.Status)
+	if result.Fallback != "bootstrap" {
+		t.Fatalf("fallback marker = %q want bootstrap", result.Fallback)
 	}
 	if requests < 2 {
 		t.Fatalf("expected history request plus fallback list requests, got %d", requests)

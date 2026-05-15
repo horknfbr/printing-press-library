@@ -20,27 +20,29 @@ import (
 var version = "1.1.0"
 
 type rootFlags struct {
-	asJSON        bool
-	compact       bool
-	csv           bool
-	plain         bool
-	quiet         bool
-	dryRun        bool
-	noCache       bool
-	noInput       bool
-	idempotent    bool
-	yes           bool
-	agent         bool
-	selectFields  string
-	configPath    string
-	profileName   string
-	deliverSpec   string
-	timeout       time.Duration
-	rateLimit     float64
-	dataSource    string
-	freshnessMeta any
-	noRefresh     bool
-	envelopeMode  string
+	asJSON              bool
+	compact             bool
+	csv                 bool
+	plain               bool
+	quiet               bool
+	dryRun              bool
+	noCache             bool
+	noInput             bool
+	idempotent          bool
+	yes                 bool
+	agent               bool
+	selectFields        string
+	configPath          string
+	profileName         string
+	deliverSpec         string
+	timeout             time.Duration
+	rateLimit           float64
+	dataSource          string
+	freshnessMeta       any
+	noRefresh           bool
+	profileNoRefreshSet bool
+	profileNoRefresh    bool
+	envelopeMode        string
 
 	// account pins the active Superhuman email so per-command auth resolves
 	// to that token-store entry. Empty selects the most-recently-used
@@ -209,6 +211,9 @@ See README.md or the bundled SKILL.md for recipes.`,
 				}
 				return fmt.Errorf("profile %q not found; available: %s", flags.profileName, strings.Join(available, ", "))
 			}
+			if err := captureAutoRefreshProfile(flags, cmd, profile); err != nil {
+				return err
+			}
 			if err := ApplyProfileToFlags(cmd, profile); err != nil {
 				return err
 			}
@@ -242,8 +247,7 @@ See README.md or the bundled SKILL.md for recipes.`,
 		default:
 			return usageErr(fmt.Errorf("invalid --envelope value %q: must be full, minimal, or off", flags.envelopeMode))
 		}
-		summary := runAutoRefresh(cmd, flags)
-		flags.freshnessMeta = summary.meta()
+		runAutoRefresh(cmd, flags)
 		return nil
 	}
 	rootCmd.AddCommand(newDraftsCmd(flags))

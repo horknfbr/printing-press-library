@@ -5,93 +5,197 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/config"
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/gmail"
 	"github.com/mvanhorn/printing-press-library/library/productivity/superhuman/internal/store"
 )
 
-func runGmailHistoryRefresh(cmd *cobra.Command, flags *rootFlags) autoRefreshResult {
+// PATCH(superhuman-autorefresh-canonical): expose cache and Gmail refresh
+// helpers through the same result-shape Granola uses while binding each
+// surface to Superhuman's backend sync and Gmail history APIs.
+
+type BackendSyncResult struct {
+	TotalRecords int
+	Resources    int
+	Success      int
+	Warned       int
+	Errored      int
+	Duration     time.Duration
+}
+
+func (r BackendSyncResult) TotalRows() int { return r.TotalRecords }
+
+type GmailHistoryRefreshResult struct {
+	RowsAffected int
+	HistoryID    string
+	Fallback     string
+	Duration     time.Duration
+}
+
+func (r GmailHistoryRefreshResult) TotalRows() int { return r.RowsAffected }
+
+var runSuperhumanBackendRefresh = runSuperhumanBackendRefreshImpl
+var runGmailHistoryRefresh = runGmailHistoryRefreshImpl
+
+func runSuperhumanBackendRefreshImpl(ctx context.Context, flags *rootFlags) (BackendSyncResult, error) {
 	started := time.Now()
-	result := autoRefreshResult{Surface: "gmail", Status: "skipped"}
-	ctx := cmd.Context()
+
+	c, err := flags.newClient()
+	if err != nil {
+		return BackendSyncResult{Duration: time.Since(started)}, err
+	}
+	c.NoCache = true
+
+	db, err := store.OpenWithContext(ctx, defaultDBPath("superhuman-pp-cli"))
+	if err != nil {
+		return BackendSyncResult{Duration: time.Since(started)}, fmt.Errorf("opening local database: %w", err)
+	}
+	defer db.Close()
+
+	resources := defaultSyncResources()
+	var (
+		totalSynced  int
+		successCount int
+		warnCount    int
+		errCount     int
+		firstErr     error
+	)
+	for _, resource := range resources {
+		select {
+		case <-ctx.Done():
+			return BackendSyncResult{
+				TotalRecords: totalSynced,
+				Resources:    successCount + warnCount + errCount,
+				Success:      successCount,
+				Warned:       warnCount,
+				Errored:      errCount,
+				Duration:     time.Since(started),
+			}, ctx.Err()
+		default:
+		}
+		res := runSyncResourceQuiet(func() syncResult {
+			return syncResource(c, db, resource, "", false, 1, true, nil)
+		})
+		switch {
+		case res.Err != nil:
+			errCount++
+			if firstErr == nil {
+				firstErr = res.Err
+			}
+		case res.Warn != nil:
+			totalSynced += res.Count
+			warnCount++
+		default:
+			totalSynced += res.Count
+			successCount++
+		}
+	}
+
+	out := BackendSyncResult{
+		TotalRecords: totalSynced,
+		Resources:    successCount + warnCount + errCount,
+		Success:      successCount,
+		Warned:       warnCount,
+		Errored:      errCount,
+		Duration:     time.Since(started),
+	}
+	if successCount == 0 && warnCount == 0 && errCount > 0 {
+		if firstErr == nil {
+			firstErr = errors.New("backend sync failed with no per-resource error captured")
+		}
+		return out, firstErr
+	}
+	return out, nil
+}
+
+var syncOutputMu sync.Mutex
+
+func runSyncResourceQuiet(fn func() syncResult) syncResult {
+	syncOutputMu.Lock()
+	defer syncOutputMu.Unlock()
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return fn()
+	}
+	defer devNull.Close()
+	os.Stdout = devNull
+	os.Stderr = devNull
+	defer func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+	}()
+	return fn()
+}
+
+func runGmailHistoryRefreshImpl(ctx context.Context, flags *rootFlags) (GmailHistoryRefreshResult, error) {
+	started := time.Now()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	acct, err := resolveActiveAccount(flags)
 	if err != nil {
-		result.Duration = time.Since(started)
-		result.Err = nil
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, nil
 	}
 	db, err := store.OpenWithContext(ctx, defaultDBPath("superhuman-pp-cli"))
 	if err != nil {
-		result.Status = "failed"
-		result.Duration = time.Since(started)
-		result.Err = fmt.Errorf("open local store: %w", err)
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, fmt.Errorf("open local store: %w", err)
 	}
 	defer db.Close()
 
 	state, err := db.GetHistoryState(ctx, acct.Email)
 	if err != nil {
-		result.Status = "failed"
-		result.Duration = time.Since(started)
-		result.Err = err
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, err
 	}
 	if state == nil || state.LastHistoryID == "" {
-		result.Duration = time.Since(started)
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, nil
 	}
 
 	gc := gmail.New(acct.Store, acct.Email, acct.GoogleID, acct.AccessToken)
-	gc.Stderr = cmd.ErrOrStderr()
 	delta, err := gc.ListHistory(ctx, state.LastHistoryID, "")
 	if err != nil {
 		if gmail.IsHistoryExpired(err) {
-			fallbackRows, fallbackHistory, fallbackErr := runGmailHistoryFallbackBootstrap(cmd, flags, gc, db, acct.Email)
-			result.Duration = time.Since(started)
-			result.RowsAffected = fallbackRows
-			result.HistoryID = fallbackHistory
-			if fallbackErr != nil {
-				result.Status = "failed"
-				result.Err = fmt.Errorf("history expired and fallback bootstrap failed: %w", fallbackErr)
-				return result
+			fallbackRows, fallbackHistory, fallbackErr := runGmailHistoryFallbackBootstrap(ctx, flags, gc, db, acct.Email)
+			out := GmailHistoryRefreshResult{
+				RowsAffected: fallbackRows,
+				HistoryID:    fallbackHistory,
+				Fallback:     "bootstrap",
+				Duration:     time.Since(started),
 			}
-			result.Status = "ok"
-			return result
+			if fallbackErr != nil {
+				return out, fmt.Errorf("history expired and fallback bootstrap failed: %w", fallbackErr)
+			}
+			return out, nil
 		}
-		result.Status = "failed"
-		result.Duration = time.Since(started)
-		result.Err = err
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, err
 	}
 	apply, err := db.ApplyHistoryDelta(ctx, delta)
-	result.Duration = time.Since(started)
 	if err != nil {
-		result.Status = "failed"
-		result.Err = err
-		return result
+		return GmailHistoryRefreshResult{Duration: time.Since(started)}, err
 	}
-	result.Status = "ok"
-	result.RowsAffected = apply.Added + apply.Deleted + apply.LabelsChanged
-	result.HistoryID = apply.HistoryID
-	return result
+	return GmailHistoryRefreshResult{
+		RowsAffected: apply.Added + apply.Deleted + apply.LabelsChanged,
+		HistoryID:    apply.HistoryID,
+		Duration:     time.Since(started),
+	}, nil
 }
 
-func runGmailHistoryFallbackBootstrap(cmd *cobra.Command, flags *rootFlags, gc *gmail.Client, db *store.Store, accountEmail string) (int, string, error) {
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func runGmailHistoryFallbackBootstrap(ctx context.Context, flags *rootFlags, gc *gmail.Client, db *store.Store, accountEmail string) (int, string, error) {
 	total := 0
 	latestHistory := ""
+	cmd := &cobraCommandContext{ctx: ctx}
 	for _, folder := range []string{"inbox", "sent"} {
-		count, historyID, err := bootstrapFolder(ctx, cmd, flags, gc, db, accountEmail, folder, 50)
+		count, historyID, err := bootstrapFolder(ctx, cmd.command(), flags, gc, db, accountEmail, folder, 50)
 		total += count
 		if historyID != "" {
 			latestHistory = historyID
@@ -108,11 +212,28 @@ func runGmailHistoryFallbackBootstrap(cmd *cobra.Command, flags *rootFlags, gc *
 	return total, latestHistory, nil
 }
 
-func runSuperhumanBackendRefresh(cmd *cobra.Command, flags *rootFlags) autoRefreshResult {
-	started := time.Now()
-	return autoRefreshResult{
-		Surface:  "cache",
-		Status:   "skipped",
-		Duration: time.Since(started),
+type cobraCommandContext struct {
+	ctx context.Context
+}
+
+func (c *cobraCommandContext) command() *cobra.Command {
+	cmd := &cobra.Command{Use: "auto-refresh"}
+	cmd.SetContext(c.ctx)
+	return cmd
+}
+
+func superhumanAuthConfigured(flags *rootFlags) bool {
+	cfg, err := config.Load(flags.configPath)
+	if err != nil {
+		return false
 	}
+	if flags.account != "" {
+		cfg.ActiveEmail = flags.account
+	}
+	return cfg.AuthHeader() != ""
+}
+
+func gmailAuthConfigured(flags *rootFlags) bool {
+	_, err := resolveActiveAccount(flags)
+	return err == nil
 }

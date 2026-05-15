@@ -141,18 +141,22 @@ func buildAgentContext(rootCmd *cobra.Command) agentContext {
 			Mode:    authMode,
 			EnvVars: envVars,
 		},
-		AutoRefresh: agentContextAutoRefresh{
-			Default:      "on",
-			Flag:         "--no-refresh",
-			Env:          autoRefreshEnvVar,
-			ProfileField: "no-refresh",
-			Surfaces:     []string{"gmail", "cache"},
-			SkipList:     append([]string(nil), autoRefreshSkipCommands...),
-		},
+		AutoRefresh:                buildAutoRefreshContext(),
 		Discovery:                  buildAgentDiscoveryContext(),
 		Commands:                   collectAgentCommands(rootCmd),
 		AvailableProfiles:          profiles,
 		FeedbackEndpointConfigured: FeedbackEndpointConfigured(),
+	}
+}
+
+func buildAutoRefreshContext() agentContextAutoRefresh {
+	return agentContextAutoRefresh{
+		Default:      "on",
+		Flag:         "--no-refresh",
+		Env:          autoRefreshEnvVar,
+		ProfileField: "no-refresh",
+		Surfaces:     []string{"cache", "gmail"},
+		SkipList:     sortedNoRefreshCommands(),
 	}
 }
 
