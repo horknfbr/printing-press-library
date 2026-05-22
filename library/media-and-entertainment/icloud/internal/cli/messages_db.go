@@ -177,7 +177,7 @@ func openMessagesDB(dbPath string) (*sql.DB, error) {
 			)
 		}
 		if isPermissionError(err) {
-			return nil, fmt.Errorf("%w: %s", errFDADenied, dbPath)
+			return nil, configErr(fmt.Errorf("%w: %s", errFDADenied, dbPath))
 		}
 		return nil, err
 	}
@@ -193,15 +193,19 @@ func openMessagesDB(dbPath string) (*sql.DB, error) {
 	if err := db.Ping(); err != nil {
 		db.Close()
 		if isPermissionError(err) {
-			return nil, fmt.Errorf("%w: %s", errFDADenied, dbPath)
+			return nil, configErr(fmt.Errorf("%w: %s", errFDADenied, dbPath))
 		}
 		return nil, fmt.Errorf("cannot read chat.db: %w", err)
 	}
 	return db, nil
 }
 
-// isPermissionError detects EPERM regardless of whether the driver surfaces it
-// as syscall.EPERM, os.PathError wrapping it, or a string-only error message.
+// isPermissionError detects access denials surfaced by the OS or the SQLite
+// driver. macOS TCC denials don't always reach Go as EPERM — modernc.org/sqlite
+// often reports them as SQLITE_CANTOPEN ("unable to open database file") or a
+// surrogate code like "out of memory" because the OS withholds enough state
+// from the driver to distinguish the cause. Treat any open-side failure as a
+// likely permission issue when chat.db itself exists.
 func isPermissionError(err error) bool {
 	if err == nil {
 		return false
@@ -210,8 +214,17 @@ func isPermissionError(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "operation not permitted") ||
-		strings.Contains(msg, "permission denied")
+	for _, marker := range []string{
+		"operation not permitted",
+		"permission denied",
+		"unable to open database file",
+		"out of memory (14)", // SQLITE_CANTOPEN surrogate
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // cocoaToUnix converts a chat.db timestamp to time.Time. The encoding is
