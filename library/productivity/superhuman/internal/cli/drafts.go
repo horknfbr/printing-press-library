@@ -19,5 +19,9 @@ func newDraftsCmd(flags *rootFlags) *cobra.Command {
 	cmd.AddCommand(newDraftsWriteCmd(flags))
 	// PATCH(2026-05-14-003 U9): drafts discard.
 	cmd.AddCommand(newDraftsDiscardCmd(flags))
+	// PATCH(2026-05-22-001 U1): drafts get — read server-side draft state.
+	cmd.AddCommand(newDraftsGetCmd(flags))
+	// PATCH(2026-05-22-001 U2): drafts send — dispatch existing draft by id.
+	cmd.AddCommand(newDraftsSendCmd(flags))
 	return cmd
 }
