@@ -220,6 +220,24 @@ prediction-goat-pp-cli compare 'arizona basketball' --json
 
 Resolves the topic to paired markets and renders YES/NO + implied prob for each venue side-by-side. Tells you exactly where PM and Kalshi disagree.
 
+### Enumerate every child market under a Kalshi event
+
+When the event ticker is known (often discovered via `kalshi-series-search` then `kalshi events list --series`), one call returns every child market with live prices:
+
+```bash
+prediction-goat-pp-cli kalshi events get KXMENWORLDCUP-26 --with-markets --agent
+```
+
+Passes `with_nested_markets=true` to the upstream `/events/{ticker}` endpoint. The response includes a `markets` array with ticker, title, yes_sub_title, status, yes_ask_dollars, no_ask_dollars, volume_24h_fp, and expiration_time for each child. This is the lightweight alternative to a full sync walk when you only need one event's children.
+
+### List every Kalshi event under a series
+
+```bash
+prediction-goat-pp-cli kalshi events list --series KXMENWORLDCUP --agent
+```
+
+Filters `/events` by `series_ticker`. The `--series` flag forces `--data-source live` since the local store doesn't index by series ticker. Use this before `kalshi events get --with-markets` when you don't know the exact event ticker — series → event → markets in three calls.
+
 ### Catch mispricings across venues
 
 ```bash

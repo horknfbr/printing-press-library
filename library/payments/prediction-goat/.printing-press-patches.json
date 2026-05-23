@@ -13,6 +13,13 @@
       "upstream_issue": "Generator template should switch from DSN-pragma to connection-hook approach for all printed CLIs that use modernc.org/sqlite."
     },
     {
+      "id": "kalshi-events-with-markets-and-series-filter",
+      "summary": "Add --with-markets to `kalshi events get` (passes with_nested_markets=true upstream) and implement --series on `kalshi events list` (advertised in --help pre-fix but never declared as a flag).",
+      "reason": "Before this patch the only way to enumerate every child market under a Kalshi event was raw curl against the upstream API. The CLI now returns all 56 KXMENWORLDCUP-26 child markets in one call. The --series filter on list completes the series → event → markets walk that the existing CLI surface implied but couldn't actually execute.",
+      "files": ["internal/cli/kalshi_events.go", "internal/cli/kalshi_events_test.go", "SKILL.md"],
+      "validated_outcome": "End-to-end smoke against live Kalshi API: `kalshi events get KXMENWORLDCUP-26 --with-markets --agent` returns 56 markets including KXMENWORLDCUP-26-PT; `kalshi events list --series KXMENWORLDCUP --data-source live --agent` returns the 2026 event. go test passes; verify_skill.py still passes after SKILL.md additions."
+    },
+    {
       "id": "venue-scoping-flags",
       "summary": "Add --venue, --polymarket, --kalshi flags to topic, compare, liquid, movers, resolving, trending, new via a shared addVenueFlags + resolveVenue helper. Default behavior (no flag) stays cross-venue.",
       "reason": "Agents that already know which venue they want should be able to skip the second one to halve query latency. compare additionally errors when scoped to a single venue (it requires both).",

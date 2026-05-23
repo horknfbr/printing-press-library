@@ -27,13 +27,13 @@ func newKalshiEventsCmd(flags *rootFlags) *cobra.Command {
 }
 
 func newKalshiEventsListCmd(flags *rootFlags) *cobra.Command {
-	var cursor, dbPath string
+	var cursor, dbPath, series string
 	var limit int
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List Kalshi event groups, filterable by series and synced locally",
 		Example: `  prediction-goat-pp-cli kalshi events list --data-source live --limit 10 --json
-  prediction-goat-pp-cli kalshi events list --series KXELONMARS`,
+  prediction-goat-pp-cli kalshi events list --series KXMENWORLDCUP`,
 		Annotations: map[string]string{"mcp:read-only": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dryRunOK(flags) {
@@ -48,12 +48,16 @@ func newKalshiEventsListCmd(flags *rootFlags) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("kalshi events local count: %w", err)
 				}
-				useLive = count == 0
+				// --series filtering only makes sense against the live API
+				// (the local store doesn't index by series). Force-live when
+				// the user asked for a series filter so we don't silently
+				// return unrelated locally-cached events.
+				useLive = count == 0 || series != ""
 			}
 			var items []kalshiEventItem
 			var err error
 			if useLive {
-				items, err = liveKalshiEvents(cmd, cursor, limit)
+				items, err = liveKalshiEvents(cmd, cursor, limit, series)
 			} else {
 				items, err = localKalshiEvents(cmd, dbPath, limit)
 			}
@@ -65,15 +69,18 @@ func newKalshiEventsListCmd(flags *rootFlags) *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "Max results")
 	cmd.Flags().StringVar(&cursor, "cursor", "", "Pagination cursor")
+	cmd.Flags().StringVar(&series, "series", "", "Filter to events under a series ticker (forces --data-source live)")
 	cmd.Flags().StringVar(&dbPath, "db", "", "Database path (default: standard cache location)")
 	return cmd
 }
 
 func newKalshiEventsGetCmd(flags *rootFlags) *cobra.Command {
+	var withMarkets bool
 	cmd := &cobra.Command{
-		Use:         "get <event_ticker>",
-		Short:       "Get a Kalshi event by ticker",
-		Example:     `  prediction-goat-pp-cli kalshi events get KXELONMARS-99 --json`,
+		Use:   "get <event_ticker>",
+		Short: "Get a Kalshi event by ticker",
+		Example: `  prediction-goat-pp-cli kalshi events get KXELONMARS-99 --json
+  prediction-goat-pp-cli kalshi events get KXMENWORLDCUP-26 --with-markets --agent`,
 		Annotations: map[string]string{"mcp:read-only": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -82,7 +89,11 @@ func newKalshiEventsGetCmd(flags *rootFlags) *cobra.Command {
 			if dryRunOK(flags) {
 				return nil
 			}
-			body, err := kalshi.New().Get(cmd.Context(), "/events/"+url.PathEscape(args[0]), url.Values{})
+			params := url.Values{}
+			if withMarkets {
+				params.Set("with_nested_markets", "true")
+			}
+			body, err := kalshi.New().Get(cmd.Context(), "/events/"+url.PathEscape(args[0]), params)
 			if err != nil {
 				return fmt.Errorf("kalshi events get: %w", err)
 			}
@@ -90,16 +101,72 @@ func newKalshiEventsGetCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("kalshi events get decode: %w", err)
 			}
+			if withMarkets {
+				return printJSONFiltered(cmd.OutOrStdout(), kalshiEventWithMarkets(obj), flags)
+			}
 			return printJSONFiltered(cmd.OutOrStdout(), kalshiEventSlim(obj), flags)
 		},
 	}
+	cmd.Flags().BoolVar(&withMarkets, "with-markets", false, "Include nested markets in the response (passes with_nested_markets=true upstream)")
 	return cmd
 }
 
-func liveKalshiEvents(cmd *cobra.Command, cursor string, limit int) ([]kalshiEventItem, error) {
+// kalshiEventNestedMarket projects each market row from the upstream
+// with_nested_markets response into a slim shape. Keeps the same field
+// set humans and agents already see from `kalshi markets get`, plus
+// the trading fields that make this the one-call answer for "what are
+// all the markets under this event."
+type kalshiEventNestedMarket struct {
+	Ticker         string  `json:"ticker"`
+	EventTicker    string  `json:"event_ticker,omitempty"`
+	Title          string  `json:"title"`
+	YesSubTitle    string  `json:"yes_sub_title,omitempty"`
+	Status         string  `json:"status,omitempty"`
+	YesAskDollars  float64 `json:"yes_ask_dollars,omitempty"`
+	NoAskDollars   float64 `json:"no_ask_dollars,omitempty"`
+	Volume24hFP    float64 `json:"volume_24h_fp,omitempty"`
+	ExpirationTime string  `json:"expiration_time,omitempty"`
+}
+
+type kalshiEventWithMarketsItem struct {
+	kalshiEventItem
+	Markets []kalshiEventNestedMarket `json:"markets,omitempty"`
+}
+
+func kalshiEventWithMarkets(obj map[string]any) kalshiEventWithMarketsItem {
+	out := kalshiEventWithMarketsItem{kalshiEventItem: kalshiEventSlim(obj)}
+	raw, ok := obj["markets"].([]any)
+	if !ok {
+		return out
+	}
+	out.Markets = make([]kalshiEventNestedMarket, 0, len(raw))
+	for _, m := range raw {
+		mObj, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		out.Markets = append(out.Markets, kalshiEventNestedMarket{
+			Ticker:         jsonString(mObj, "ticker"),
+			EventTicker:    jsonString(mObj, "event_ticker"),
+			Title:          jsonString(mObj, "title"),
+			YesSubTitle:    jsonString(mObj, "yes_sub_title"),
+			Status:         jsonString(mObj, "status"),
+			YesAskDollars:  jsonFloat(mObj, "yes_ask_dollars"),
+			NoAskDollars:   jsonFloat(mObj, "no_ask_dollars"),
+			Volume24hFP:    jsonFloat(mObj, "volume_24h_fp"),
+			ExpirationTime: jsonString(mObj, "expiration_time"),
+		})
+	}
+	return out
+}
+
+func liveKalshiEvents(cmd *cobra.Command, cursor string, limit int, series string) ([]kalshiEventItem, error) {
 	params := url.Values{"limit": {fmt.Sprint(limit)}}
 	if cursor != "" {
 		params.Set("cursor", cursor)
+	}
+	if series != "" {
+		params.Set("series_ticker", series)
 	}
 	body, err := kalshi.New().Get(cmd.Context(), "/events", params)
 	if err != nil {
