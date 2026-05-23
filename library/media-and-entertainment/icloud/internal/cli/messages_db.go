@@ -297,8 +297,12 @@ func listChats(db *sql.DB, opts ChatListOpts) ([]ChatRow, error) {
 	var whereLastDate string
 	args := []any{}
 	if opts.Since != nil {
+		// PATCH(messages-list-chats-since-nanosecond-conversion): last_msg.last_date
+		// is MAX(m.date) which is nanoseconds-since-Cocoa-epoch on modern macOS.
+		// Convert the user-supplied seconds-domain threshold to nanoseconds so
+		// the comparison meets in the same unit. Matches searchMessages's pattern.
 		whereLastDate = " AND last_msg.last_date >= ?"
-		args = append(args, opts.Since.Unix()-cocoaEpoch)
+		args = append(args, (opts.Since.Unix()-cocoaEpoch)*1_000_000_000)
 	}
 	if !opts.IncludeEmpty {
 		whereLastDate += " AND last_msg.last_date IS NOT NULL"
@@ -468,9 +472,14 @@ func searchMessages(db *sql.DB, opts SearchOpts) ([]MessageRow, error) {
 
 	// SQL LIKE phase. Match against text column only; attributedBody hits
 	// are caught in the post-scan filter below.
+	//
+	// PATCH(messages-like-escape-clause): escapeLike writes \% and \_ into the
+	// pattern but the LIKE expression must carry an explicit ESCAPE clause for
+	// SQLite to honor the backslash as an escape character. Without it, queries
+	// containing literal % or _ silently miss rows from the SQL phase.
 	textCond := ""
 	if opts.Query != "" {
-		textCond = " AND (m.text LIKE ? COLLATE NOCASE OR m.text IS NULL)"
+		textCond = ` AND (m.text LIKE ? COLLATE NOCASE ESCAPE '\' OR m.text IS NULL)`
 		args = append(args, "%"+escapeLike(opts.Query)+"%")
 	}
 
@@ -517,10 +526,11 @@ func searchMessages(db *sql.DB, opts SearchOpts) ([]MessageRow, error) {
 	return out, rows.Err()
 }
 
-// escapeLike escapes the SQL LIKE metacharacters in a user query. Returned
-// string is safe to embed in a `%query%` LIKE pattern without an ESCAPE clause
-// for the common case; callers wanting strict escaping should use a parameter
-// binding and explicit ESCAPE clause.
+// escapeLike escapes the SQL LIKE metacharacters in a user query. The returned
+// string contains backslash-prefixed `\%`, `\_`, and `\\` sequences and MUST
+// be paired with an explicit `ESCAPE '\'` clause in the LIKE expression for
+// SQLite to honor the escapes. Without the ESCAPE clause SQLite treats the
+// backslash as a literal character and the intended escaping does not fire.
 func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "%", `\%`)

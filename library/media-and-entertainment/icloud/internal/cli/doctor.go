@@ -191,9 +191,22 @@ database schema, and asset count.`,
 	return cmd
 }
 
-// checkMessagesSchema verifies the three tables an iMessage query touches.
+// checkMessagesSchema verifies the tables an iMessage query touches.
+//
+// PATCH(messages-doctor-junction-tables): every messages query joins
+// chat_message_join, and `messages export` additionally touches
+// message_attachment_join. A stripped or very old chat.db can be missing
+// these without missing the primary tables, which used to make doctor
+// report "schema valid" but the first real query fail.
 func checkMessagesSchema(db *sql.DB) bool {
-	for _, table := range []string{"message", "chat", "handle"} {
+	tables := []string{
+		"message",
+		"chat",
+		"handle",
+		"chat_message_join",
+		"message_attachment_join",
+	}
+	for _, table := range tables {
 		var name string
 		if err := db.QueryRow(
 			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,

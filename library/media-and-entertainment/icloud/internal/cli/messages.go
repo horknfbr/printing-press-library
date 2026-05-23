@@ -14,8 +14,8 @@ All commands open chat.db in read-only mode. Full Disk Access is required —
 run "icloud-pp-cli doctor" if any command fails with a permission error.`,
 	}
 
-	messages.PersistentFlags().StringVar(&f.messagesDBPath, "messages-db", "",
-		"Path to chat.db (default: ~/Library/Messages/chat.db)")
+	// --messages-db is registered at the root level (see root.go) so that
+	// `doctor` and any future sibling command can read the same override.
 
 	messages.AddCommand(newMessagesListChatsCmd(f))
 	messages.AddCommand(newMessagesSearchCmd(f))
