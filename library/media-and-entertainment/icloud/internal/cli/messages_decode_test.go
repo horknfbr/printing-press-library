@@ -12,6 +12,11 @@ import (
 // single UTF-8 string with the given length-prefix encoding. Used by tests
 // to exercise the decoder against known-shape inputs without depending on
 // captured chat.db rows.
+//
+// This shape places the "streamtyped" marker at offset 0, exercising the
+// backward-compatible path of the prefix scan. For the canonical Apple
+// format (marker at offset 2 behind a \x04\x0B version/length pair), see
+// buildCanonicalBlob.
 func buildSimpleBlob(text string, prefixVariant byte) []byte {
 	var b []byte
 	b = append(b, []byte("streamtyped")...)
@@ -206,6 +211,12 @@ func TestDecodeAttributedBody_LooksLikeMessageText(t *testing.T) {
 		{"class name NSMutableAttributedString", "NSMutableAttributedString", false},
 		{"control chars dominant", "\x01\x02\x03\x04", false},
 		{"low control byte ratio", "hello\nworld\tfine", true},
+		// Rune-denominator regression coverage (PATCH messages-control-byte-rune-denominator):
+		// a short CJK string with a single control byte must be rejected on rune
+		// count, not on byte length where multi-byte runes hid the ratio.
+		{"cjk with one control", "你好\x01", false},
+		// All-emoji text with no control bytes must still pass.
+		{"emoji only", "🎉🎊👋🚀", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,5 +225,105 @@ func TestDecodeAttributedBody_LooksLikeMessageText(t *testing.T) {
 				t.Errorf("looksLikeMessageText(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// buildCanonicalBlob constructs a typedstream-prefixed blob in the canonical
+// Apple NSArchiver shape: a leading 2-byte version+length header (`\x04\x0B`)
+// followed by the literal "streamtyped" marker, then a representative
+// NSAttributedString → NSObject → NSString class chain (synthesized from the
+// public format spec, not captured from any chat.db), then the string tag
+// and length-prefixed UTF-8 text. Used to exercise the prefix-scan code path
+// that real chat.db rows hit in production.
+func buildCanonicalBlob(text string, prefixVariant byte) []byte {
+	var b []byte
+	// Canonical Apple typedstream header: version 4, length of "streamtyped" (11),
+	// then the marker.
+	b = append(b, 0x04, 0x0b)
+	b = append(b, []byte("streamtyped")...)
+	// System version + a short, synthetic class-chain pattern matching the
+	// documented NSArchiver structure for NSAttributedString. Padding bytes
+	// here are arbitrary non-tag values; the decoder's tag scan navigates
+	// past them to find the 0x2B string tag.
+	b = append(b, 0x81, 0xe8, 0x03, 0x84, 0x01, 0x40, 0x84, 0x84, 0x84, 0x12)
+	b = append(b, []byte("NSAttributedString")...)
+	b = append(b, 0x00, 0x84, 0x84, 0x08)
+	b = append(b, []byte("NSObject")...)
+	b = append(b, 0x00, 0x85, 0x92, 0x84, 0x84, 0x84, 0x08)
+	b = append(b, []byte("NSString")...)
+	b = append(b, 0x01, 0x94, 0x84, 0x01)
+	b = append(b, typedStreamStringTag)
+
+	textBytes := []byte(text)
+	switch prefixVariant {
+	case 0: // direct single-byte length (length < 0x81)
+		b = append(b, byte(len(textBytes)))
+	case lengthPrefix1Byte:
+		b = append(b, lengthPrefix1Byte, byte(len(textBytes)))
+	case lengthPrefix2Byte:
+		buf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(buf, uint16(len(textBytes)))
+		b = append(b, lengthPrefix2Byte)
+		b = append(b, buf...)
+	case lengthPrefix4Byte:
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, uint32(len(textBytes)))
+		b = append(b, lengthPrefix4Byte)
+		b = append(b, buf...)
+	}
+	b = append(b, textBytes...)
+	return b
+}
+
+func TestDecodeAttributedBody_CanonicalFormat(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		variant byte
+	}{
+		{"direct length ASCII", "hello canonical", 0},
+		{"direct length emoji", "ship it 🚀", 0},
+		{"1-byte length", strings.Repeat("a", 200), lengthPrefix1Byte},
+		{"2-byte length", strings.Repeat("hi ", 500), lengthPrefix2Byte},
+		{"4-byte length", strings.Repeat("xyz ", 20000), lengthPrefix4Byte},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			blob := buildCanonicalBlob(tc.text, tc.variant)
+			text, source := decodeAttributedBody(blob)
+			if text != tc.text || source != textSourceDecoded {
+				t.Errorf("canonical %s: got source=%q text-len=%d, want source=%q text-len=%d",
+					tc.name, source, len(text), textSourceDecoded, len(tc.text))
+			}
+		})
+	}
+}
+
+func TestDecodeAttributedBody_MarkerOutsideScanWindow(t *testing.T) {
+	// Place the "streamtyped" marker at offset 30 — past the prefix-scan
+	// window. Decoder must not pick it up.
+	var blob []byte
+	blob = append(blob, make([]byte, 30)...)
+	blob = append(blob, []byte("streamtyped")...)
+	blob = append(blob, 0x04, 0x0b, 0x06)
+	blob = append(blob, typedStreamStringTag)
+	blob = append(blob, 0x05)
+	blob = append(blob, []byte("hello")...)
+
+	text, source := decodeAttributedBody(blob)
+	if source == textSourceDecoded {
+		t.Errorf("marker outside scan window should not decode, got (%q, %q)", text, source)
+	}
+}
+
+func TestDecodeAttributedBody_BackwardCompatBareMarker(t *testing.T) {
+	// Blobs constructed with the bare-"streamtyped" prefix (no leading
+	// \x04\x0B) must still decode under the permissive scan. Locks the
+	// backward-compat case so a future refactor doesn't quietly tighten
+	// the prefix check.
+	blob := buildSimpleBlob("backward compat", 0)
+	text, source := decodeAttributedBody(blob)
+	if text != "backward compat" || source != textSourceDecoded {
+		t.Errorf("bare-marker blob: got (%q, %q), want (\"backward compat\", %q)", text, source, textSourceDecoded)
 	}
 }

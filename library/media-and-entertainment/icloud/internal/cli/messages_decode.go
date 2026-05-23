@@ -51,6 +51,12 @@ const (
 // real message. Used as a sanity gate to avoid OOB reads on malformed input.
 const maxMessageBytes = 1 << 20 // 1 MiB
 
+// Window of bytes at the start of the blob to scan for the "streamtyped"
+// marker. The canonical Apple typedstream prefix is `\x04\x0Bstreamtyped`
+// (marker at offset 2); 20 bytes is generous slack for any future header
+// padding without admitting random binary that happens to embed the string.
+const typedStreamPrefixScanWindow = 20
+
 // decodeAttributedBody extracts the human-readable text from a chat.db
 // attributedBody blob (NSArchiver typedstream wrapping an NSMutableAttributedString).
 //
@@ -64,11 +70,18 @@ func decodeAttributedBody(blob []byte) (text string, source string) {
 		return "", textSourceUnrecoverable
 	}
 
-	// The typedstream header begins with the ASCII bytes "streamtyped".
-	// Some blobs we see in the wild are not real typedstream content
-	// (e.g., older message.attributedBody rows holding plain bytes); fail
-	// fast on those.
-	if !bytes.HasPrefix(blob, []byte("streamtyped")) {
+	// PATCH(messages-attributedbody-prefix-scan): the canonical NSArchiver
+	// typedstream emitted by Apple begins with a 2-byte header `\x04\x0B`
+	// (version + length-of-"streamtyped") followed by the literal ASCII
+	// "streamtyped" — so the marker sits at offset 2, not offset 0. The
+	// earlier strict HasPrefix check rejected every real chat.db row.
+	// Scan the first ~20 bytes for the marker instead; the downstream
+	// string-tag scan remains the authoritative validity gate.
+	headWindow := blob
+	if len(headWindow) > typedStreamPrefixScanWindow {
+		headWindow = headWindow[:typedStreamPrefixScanWindow]
+	}
+	if !bytes.Contains(headWindow, []byte("streamtyped")) {
 		return "", textSourceUnrecoverable
 	}
 
@@ -190,16 +203,21 @@ func looksLikeMessageText(s string) bool {
 		return false
 	}
 
-	// Reject candidates with too many control bytes. Genuine messages
+	// Reject candidates with too many control characters. Genuine messages
 	// (including emoji and CJK) have very few; metadata blobs often
 	// contain runs of control characters. Threshold: 25%.
+	//
+	// PATCH(messages-control-byte-rune-denominator): count runes in both
+	// numerator and denominator. Using len(s) (bytes) as the denominator
+	// inflates with multi-byte runes (emoji, CJK) and slackens the threshold
+	// below intent.
 	control := 0
 	for _, r := range s {
 		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
 			control++
 		}
 	}
-	if len(s) > 0 && control*4 > len(s) {
+	if runeCount := utf8.RuneCountInString(s); runeCount > 0 && control*4 > runeCount {
 		return false
 	}
 
