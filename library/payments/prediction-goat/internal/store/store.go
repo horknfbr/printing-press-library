@@ -82,7 +82,7 @@ func IsUUID(s string) bool {
 // shape — adding columns, dropping indexes, changing FTS5 tokenizers —
 // so an older binary refuses to open a newer database rather than silently
 // producing wrong results against a schema it cannot read.
-const StoreSchemaVersion = 2
+const StoreSchemaVersion = 3
 
 const resourcesFTSCreateSQL = `CREATE VIRTUAL TABLE IF NOT EXISTS resources_fts USING fts5(
 	id, resource_type, content, tokenize='porter unicode61'
@@ -1129,6 +1129,27 @@ func (s *Store) migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS "idx_teams_created_at" ON "teams"("created_at")`,
 		`CREATE INDEX IF NOT EXISTS "idx_teams_updated_at" ON "teams"("updated_at")`,
+		// search_learnings (v4): LLM-driven per-query reranking. Populated by
+		// the `teach` command (silent, backgrounded by the LLM after a
+		// successful response) and read by the rerank layer in topic/compare
+		// to boost/hide/alias hits on subsequent queries. See learnings.go
+		// for the full semantics. Per-user table; stays small.
+		`CREATE TABLE IF NOT EXISTS search_learnings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			query_pattern TEXT NOT NULL,
+			venue TEXT,
+			resource_type TEXT,
+			resource_id TEXT NOT NULL,
+			action TEXT NOT NULL,
+			alias_target TEXT,
+			source TEXT NOT NULL,
+			confidence INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_observed_at DATETIME,
+			notes TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_learn_query ON search_learnings(query_pattern)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_unique ON search_learnings(query_pattern, resource_id, action)`,
 	}
 
 	// Run every migration — including the column backfill and the

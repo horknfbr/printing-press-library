@@ -131,7 +131,19 @@ func newCompareCmd(flags *rootFlags) *cobra.Command {
 			// every PM and Kalshi compareVenue before we serialize the
 			// pairs. See freshness.go for the design.
 			outcome := refreshComparePairs(cmd.Context(), nil, truePairs)
+			// Rerank layer: apply taught learnings AFTER freshness refresh so
+			// boost/hide/alias act on the live prices. compare is bilateral
+			// by design, so synthetic inserts are skipped. See teach.go.
+			var applied int
+			var hasHigh bool
+			if !noLearnActive(flags) {
+				truePairs, applied, hasHigh = applyLearningsForCompare(cmd.Context(), db, topic, truePairs)
+			}
 			meta := buildFreshnessMeta(outcome, indexSyncedAt(db))
+			if meta != nil {
+				meta.LearningsApplied = applied
+				meta.TeachHint = teachHintFor(topic, applied, hasHigh, len(truePairs))
+			}
 			result := compareResult{Topic: topic, Pairs: truePairs, Meta: meta}
 			if len(truePairs) == 0 {
 				result.Unpaired = buildUnpaired(pmMarkets, kalshiMarkets, 5)

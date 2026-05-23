@@ -71,6 +71,16 @@ const (
 type freshnessMeta struct {
 	PriceSource   string     `json:"price_source"`
 	IndexSyncedAt *time.Time `json:"index_synced_at,omitempty"`
+	// LearningsApplied is the count of search_learnings rules that
+	// touched the output of this command. 0 when the rerank layer ran
+	// but no rule fired; absent when --no-learn /
+	// PREDICTION_GOAT_NO_LEARN disabled the layer. See teach.go.
+	LearningsApplied int `json:"learnings_applied,omitempty"`
+	// TeachHint is set when the LLM should record a learning for the
+	// current query (no high-confidence boost already fired). Empty
+	// when no hint is warranted — e.g., a high-confidence row already
+	// covers this query, or no hits came back.
+	TeachHint string `json:"teach_hint,omitempty"`
 }
 
 // liveValues holds the price-bearing fields refreshed from upstream.

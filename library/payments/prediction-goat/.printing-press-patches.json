@@ -73,6 +73,28 @@
       ],
       "validated_outcome": "go test ./... passes with new freshness assertions. agent-context schema_version bumped with new top-level freshness block enumerating the commands that emit meta.price_source. Human-mode terminal output prints a 'Index synced Xh ago, prices live' footer; --json / --agent mode does not.",
       "upstream_issue": "Generator template for CLIs that maintain a local discovery index alongside a price-bearing upstream should adopt the live-on-read pattern by default."
+    },
+    {
+      "id": "llm-driven-learning-pipeline",
+      "summary": "Add `teach` (LLM-fired, silent, backgroundable) and `recall` (LLM-fired, pre-discovery) plus a rerank layer in topic/compare that applies the resulting boost/hide/alias rules. schema bumped 3->4 with the search_learnings table; agent-context schema bumped 4->5 to advertise the contract.",
+      "reason": "The agent paid the 'took forever to find Portugal's ticker' tax on every session because the central FTS index has no signal that the LLM already found the right ticker last time. Now the LLM teaches the CLI at response-time with the user's natural-language question and the tickers that made it into the answer; future overlapping queries (token-set Jaccard >= 0.6) short-circuit discovery via `recall` and rerank surfaces the right tickers via the apply layer. Per-user, fire-and-forget, silent on success, inspectable via `learnings list`, undoable via `forget`, and disableable via --no-learn / PREDICTION_GOAT_NO_LEARN.",
+      "files": [
+        "internal/store/learnings.go",
+        "internal/store/learnings_test.go",
+        "internal/store/store.go",
+        "internal/store/fts_content_test.go",
+        "internal/cli/teach.go",
+        "internal/cli/teach_test.go",
+        "internal/cli/root.go",
+        "internal/cli/topic.go",
+        "internal/cli/compare.go",
+        "internal/cli/freshness.go",
+        "internal/cli/agent_context.go",
+        "SKILL.md"
+      ],
+      "validated_outcome": "go test ./... passes (374 tests, 33 new across teach/recall/learnings/forget/apply). verify_skill.py passes. End-to-end: a `teach` for 'portugal world cup odds' lands a row that subsequent `recall` calls find by token overlap; the rerank layer surfaces it at position 0 in `topic` output regardless of FTS ranking; `--no-learn` and PREDICTION_GOAT_NO_LEARN both disable the surface. teach.log captures background failures; learnings.jsonl mirrors every teach/forget for grep-without-SQL inspection.",
+      "upstream_issue": "Generator template for printed CLIs that ship a discovery index should consider adopting the LLM-driven teach/recall pattern: per-user, fire-and-forget write surface plus pre-discovery read surface, fed by the LLM's act of responding rather than CLI-side heuristics. Generalizes to any read-mostly catalog CLI."
+>>>>>>> 2b5c5a40 (feat(prediction-goat): LLM-driven teach/recall learning pipeline (U8))
     }
   ]
 }

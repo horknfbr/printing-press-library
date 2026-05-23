@@ -16,7 +16,9 @@ import (
 // shape emitted by `agent-context`. Agents should check this before
 // parsing. Shape at v3 adds kind-aware auth env var metadata. Shape at
 // v4 advertises the discovery-command live-on-read freshness contract.
-const agentContextSchemaVersion = "4"
+// Shape at v5 advertises the LLM-driven learning contract (recall +
+// teach + meta.learnings_applied + meta.teach_hint).
+const agentContextSchemaVersion = "5"
 
 // agentContext is the structured description of this CLI consumed by AI
 // agents. Inspired by Cloudflare's /cdn-cgi/explorer/api runtime endpoint
@@ -31,6 +33,26 @@ type agentContext struct {
 	AvailableProfiles          []string               `json:"available_profiles"`
 	FeedbackEndpointConfigured bool                   `json:"feedback_endpoint_configured"`
 	Freshness                  *agentContextFreshness `json:"freshness,omitempty"`
+	Learning                   *agentContextLearning  `json:"learning,omitempty"`
+}
+
+// agentContextLearning advertises the LLM-driven learning contract:
+// the agent calls `recall` BEFORE running discovery on a new user
+// question, and (after assembling its response) fires `teach` in the
+// background to record which tickers ended up in the answer.
+// Subsequent calls with overlapping queries get the right tickers
+// boosted automatically via the rerank Apply pass in topic / compare.
+//
+// MetaFields enumerates the keys this learning surface adds to the
+// `meta` envelope on the supported commands. DisableEnvVar and
+// DisableFlag are the disable controls.
+type agentContextLearning struct {
+	RecallCommand string   `json:"recall_command"`
+	TeachCommand  string   `json:"teach_command"`
+	AppliedIn     []string `json:"applied_in"`
+	MetaFields    []string `json:"meta_fields"`
+	DisableFlag   string   `json:"disable_flag"`
+	DisableEnvVar string   `json:"disable_env_var"`
 }
 
 // agentContextFreshness advertises the live-on-read price refresh
@@ -157,6 +179,14 @@ func buildAgentContext(rootCmd *cobra.Command) agentContext {
 			PriceSourceValues: []string{
 				priceSourceLive, priceSourceStale, priceSourceMixed, priceSourceIndex,
 			},
+		},
+		Learning: &agentContextLearning{
+			RecallCommand: "recall \"<query>\" --agent",
+			TeachCommand:  "teach --query \"<query>\" --resource <id> [--resource <id>...] &",
+			AppliedIn:     []string{"topic", "compare"},
+			MetaFields:    []string{"learnings_applied", "teach_hint"},
+			DisableFlag:   "--no-learn",
+			DisableEnvVar: noLearnEnvVar,
 		},
 	}
 }

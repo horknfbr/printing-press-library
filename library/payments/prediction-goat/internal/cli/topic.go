@@ -146,10 +146,22 @@ func newTopicCmd(flags *rootFlags) *cobra.Command {
 			// stale prices. Runs AFTER expand/with-prices so synthetic rows
 			// inserted by those steps also get fresh values. See freshness.go.
 			outcome := refreshTopicHits(cmd.Context(), nil, results)
+			// Rerank layer: apply taught learnings AFTER freshness refresh so
+			// boost/hide/alias act on the live prices. See teach.go for the
+			// LLM contract.
+			var applied int
+			var hasHigh bool
+			if !noLearnActive(flags) {
+				results, applied, hasHigh = applyLearningsForTopic(cmd.Context(), db, topic, results)
+			}
 			for i := range results {
 				results[i].YesPercent = yesPercent(results[i].YesProbability)
 			}
 			meta := buildFreshnessMeta(outcome, indexSyncedAt(db))
+			if meta != nil {
+				meta.LearningsApplied = applied
+				meta.TeachHint = teachHintFor(topic, applied, hasHigh, len(results))
+			}
 			result := topicResult{Topic: topic, Count: len(results), Truncated: truncated, Hits: results, Meta: meta}
 			if flags.asJSON || !isTerminal(cmd.OutOrStdout()) {
 				if err := printJSONFiltered(cmd.OutOrStdout(), result, flags); err != nil {

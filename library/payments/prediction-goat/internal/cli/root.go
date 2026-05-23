@@ -44,6 +44,11 @@ type rootFlags struct {
 	rateLimit           float64
 	dataSource          string
 	freshnessMeta       any
+	// noLearn disables both the teach (write) side and the rerank apply
+	// (read) side for a single invocation. Honored alongside the env
+	// var PREDICTION_GOAT_NO_LEARN. Determinism-focused agent flows set
+	// this so a learning row can't silently change subsequent results.
+	noLearn bool
 
 	// deliverBuf captures command output when --deliver is set to a
 	// non-stdout sink. Flushed to the sink after Execute returns.
@@ -186,6 +191,7 @@ See README.md or the bundled SKILL.md for recipes.`,
 	rootCmd.PersistentFlags().StringVar(&flags.profileName, "profile", "", "Apply values from a saved profile (see 'prediction-goat-pp-cli profile list')")
 	rootCmd.PersistentFlags().StringVar(&flags.deliverSpec, "deliver", "", "Route output to a sink: stdout (default), file:<path>, webhook:<url>")
 	rootCmd.PersistentFlags().Float64Var(&flags.rateLimit, "rate-limit", 0, "Max requests per second (0 to disable)")
+	rootCmd.PersistentFlags().BoolVar(&flags.noLearn, "no-learn", false, "Disable the learning surface (teach silent no-op, rerank apply skipped). Also honored via PREDICTION_GOAT_NO_LEARN=true")
 
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		if flags.deliverSpec != "" {
@@ -275,6 +281,10 @@ See README.md or the bundled SKILL.md for recipes.`,
 	rootCmd.AddCommand(newNewCmd(flags))
 	rootCmd.AddCommand(newMoversCmd(flags))
 	rootCmd.AddCommand(newVersionCliCmd())
+	rootCmd.AddCommand(newTeachCmd(flags))
+	rootCmd.AddCommand(newRecallCmd(flags))
+	rootCmd.AddCommand(newLearningsCmd(flags))
+	rootCmd.AddCommand(newForgetCmd(flags))
 	addMarketsDiffCmd(rootCmd, flags)
 	rootCmd.AddCommand(newPolymarketCmd(flags))
 	rootCmd.AddCommand(newKalshiSeriesSearchCmd(flags))
