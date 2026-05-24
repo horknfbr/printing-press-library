@@ -93,7 +93,7 @@ func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 		{"id": "1", "title": "S", "cost": float64(1200)},
 		{"id": "2", "title": "XS", "cost": float64(99)},
 	}
-	shipping := []ppJSONObj{{"first_item": float64(500)}}
+	shipping := []ppJSONObj{{"first_item": float64(500), "additional_items": float64(250)}}
 
 	rows := buildCatalogMarginMatrix(variants, shipping, 24.99)
 
@@ -105,6 +105,19 @@ func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 	}
 	if rows[1].Cost != 0.99 || rows[1].EstimatedMargin != 19 {
 		t.Fatalf("unexpected sub-dollar margin row: %#v", rows[1])
+	}
+}
+
+func TestLoadStoreObjectsReturnsListErrors(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "empty.db")
+	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ppLoadStoreObjects(dbPath, []string{"products", "products-json"}, 100)
+
+	if err == nil || !strings.Contains(err.Error(), "load local resources") {
+		t.Fatalf("expected local resource load error, got %v", err)
 	}
 }
 

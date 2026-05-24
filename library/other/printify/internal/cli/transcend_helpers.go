@@ -98,9 +98,11 @@ func ppLoadStoreObjects(dbPath string, resourceTypes []string, limit int) ([]ppJ
 	}
 	defer localStore.Close()
 	var all []ppJSONObj
+	var listErrors []error
 	for _, resourceType := range resourceTypes {
 		rawItems, err := localStore.List(resourceType, limit)
 		if err != nil {
+			listErrors = append(listErrors, fmt.Errorf("%s: %w", resourceType, err))
 			continue
 		}
 		for _, raw := range rawItems {
@@ -109,6 +111,9 @@ func ppLoadStoreObjects(dbPath string, resourceTypes []string, limit int) ([]ppJ
 				all = append(all, obj)
 			}
 		}
+	}
+	if len(listErrors) == len(resourceTypes) {
+		return nil, fmt.Errorf("load local resources: %w", errors.Join(listErrors...))
 	}
 	return all, nil
 }

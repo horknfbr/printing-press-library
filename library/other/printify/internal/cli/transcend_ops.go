@@ -199,10 +199,11 @@ func buildCatalogMarginMatrix(variants, shipping []ppJSONObj, targetPrice float6
 func lowestShippingCost(shipping []ppJSONObj) float64 {
 	lowest := 0.0
 	for _, item := range shipping {
-		for _, key := range []string{"cost", "price", "first_item", "additional_items"} {
+		for _, key := range []string{"first_item", "cost", "price"} {
 			value := ppMoneyCents(ppFloat(item, key))
 			if value > 0 && (lowest == 0 || value < lowest) {
 				lowest = value
+				break
 			}
 		}
 	}
