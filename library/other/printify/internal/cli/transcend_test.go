@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,16 +89,22 @@ func TestBuildPersonalizationBatchWritesExpandedManifest(t *testing.T) {
 }
 
 func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
-	variants := []ppJSONObj{{"id": "1", "title": "S", "cost": float64(1200)}}
+	variants := []ppJSONObj{
+		{"id": "1", "title": "S", "cost": float64(1200)},
+		{"id": "2", "title": "XS", "cost": float64(99)},
+	}
 	shipping := []ppJSONObj{{"first_item": float64(500)}}
 
 	rows := buildCatalogMarginMatrix(variants, shipping, 24.99)
 
-	if len(rows) != 1 {
-		t.Fatalf("expected one margin row, got %d", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("expected two margin rows, got %d", len(rows))
 	}
 	if rows[0].Cost != 12 || rows[0].Shipping != 5 || rows[0].EstimatedMargin != 7.99 {
 		t.Fatalf("unexpected margin row: %#v", rows[0])
+	}
+	if rows[1].Cost != 0.99 || rows[1].EstimatedMargin != 19 {
+		t.Fatalf("unexpected sub-dollar margin row: %#v", rows[1])
 	}
 }
 
@@ -134,6 +142,24 @@ func TestBuildFulfillmentRiskFlagsMissingShipment(t *testing.T) {
 	}
 	if rows[0].Risks[0] != "no shipment records" {
 		t.Fatalf("unexpected risks: %#v", rows[0].Risks)
+	}
+}
+
+func TestFulfillmentRiskReturnsProductLoadError(t *testing.T) {
+	dir := t.TempDir()
+	ordersPath := filepath.Join(dir, "orders.json")
+	if err := os.WriteFile(ordersPath, []byte(`[{"id":"order_1","status":"pending","line_items":[{"product_id":"prod_1","variant_id":"101"}]}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newFulfillmentRiskCmd(&rootFlags{asJSON: true})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--orders-file", ordersPath, "--products-file", filepath.Join(dir, "missing.json")})
+
+	err := cmd.Execute()
+
+	if err == nil || !strings.Contains(err.Error(), "missing.json") {
+		t.Fatalf("expected products load error, got %v", err)
 	}
 }
 

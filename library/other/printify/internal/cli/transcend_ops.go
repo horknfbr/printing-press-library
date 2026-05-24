@@ -115,7 +115,10 @@ func newFulfillmentRiskCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			products, _ := ppLoadObjectsFromFileOrStore(productsFile, dbPath, []string{"products", "products-json", "products_json", "shops-products-json"}, 10000)
+			products, err := ppLoadObjectsFromFileOrStore(productsFile, dbPath, []string{"products", "products-json", "products_json", "shops-products-json"}, 10000)
+			if err != nil {
+				return err
+			}
 			rows := buildFulfillmentRisk(orders, products)
 			raw, err := json.Marshal(rows)
 			if err != nil {

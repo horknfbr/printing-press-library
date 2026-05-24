@@ -223,7 +223,7 @@ func ppID(obj ppJSONObj) string {
 }
 
 func ppMoneyCents(value float64) float64 {
-	if value > 99 {
+	if value > 0 && value == math.Trunc(value) {
 		return value / 100
 	}
 	return value

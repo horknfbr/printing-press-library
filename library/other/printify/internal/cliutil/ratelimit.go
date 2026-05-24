@@ -24,7 +24,7 @@ type AdaptiveLimiter struct {
 	ceiling     float64
 	successes   int
 	rampAfter   int
-	lastRequest time.Time // zero-value: first Wait() returns immediately
+	lastRequest time.Time // zero-value: first Wait() returns immediately; may reserve a future slot
 }
 
 // NewAdaptiveLimiter returns a limiter starting at ratePerSec, or nil when
@@ -46,14 +46,23 @@ func (l *AdaptiveLimiter) Wait() {
 	}
 	l.mu.Lock()
 	delay := time.Duration(float64(time.Second) / l.rate)
-	elapsed := time.Since(l.lastRequest)
-	l.mu.Unlock()
-	if elapsed < delay {
-		time.Sleep(delay - elapsed)
+	now := time.Now()
+	sleepFor := time.Duration(0)
+	if !l.lastRequest.IsZero() {
+		next := l.lastRequest.Add(delay)
+		if now.Before(next) {
+			sleepFor = next.Sub(now)
+			l.lastRequest = next
+		} else {
+			l.lastRequest = now
+		}
+	} else {
+		l.lastRequest = now
 	}
-	l.mu.Lock()
-	l.lastRequest = time.Now()
 	l.mu.Unlock()
+	if sleepFor > 0 {
+		time.Sleep(sleepFor)
+	}
 }
 
 func (l *AdaptiveLimiter) OnSuccess() {
