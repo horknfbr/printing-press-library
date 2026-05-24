@@ -219,6 +219,14 @@ func ExtractClusters(decoded string) ([]Cluster, error) {
 		if c.CurrentRank == 0 && c.Rank > 0 {
 			c.CurrentRank = c.Rank
 		}
+		// PATCH: Treat PeakRank=9999 as absent (Digg's sentinel for newly-
+		// detected clusters with no tracked all-time peak). Normalize at
+		// parse time so a sentinel occurrence does not block a later
+		// occurrence's legitimate PeakRank via the first-non-zero-wins
+		// merge guard. Mirrors the Rank → CurrentRank normalization above.
+		if c.PeakRank == 9999 {
+			c.PeakRank = 0
+		}
 		// Keep only objects that look like real clusters. cluster_detected
 		// events also carry a clusterId, but they're events, not clusters.
 		// Fold them into existing clusters if the cluster is already there;
@@ -233,12 +241,6 @@ func ExtractClusters(decoded string) ([]Cluster, error) {
 	}
 	out := make([]Cluster, 0, len(merged))
 	for _, c := range merged {
-		// PATCH: 9999 is Digg's internal sentinel for newly-detected clusters
-		// with no tracked all-time peak; normalize to 0 so the omitempty tag
-		// on PeakRank drops it from JSON output.
-		if c.PeakRank == 9999 {
-			c.PeakRank = 0
-		}
 		out = append(out, c)
 	}
 	return out, nil

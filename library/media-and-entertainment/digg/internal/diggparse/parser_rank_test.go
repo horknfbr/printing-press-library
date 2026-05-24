@@ -143,6 +143,29 @@ func TestExtractClustersNormalizesPeakRankSentinel(t *testing.T) {
 	}
 }
 
+func TestExtractClustersSentinelDoesNotBlockLaterPeakRank(t *testing.T) {
+	// First occurrence carries the 9999 sentinel (newly-detected, no
+	// tracked peak). Later occurrence has a legitimate peakRank=42 from
+	// another section. The pre-merge sentinel normalization must zero out
+	// the sentinel so the first-non-zero-wins merge guard accepts the
+	// later real value. Without parse-time normalization, the sentinel
+	// would block the real peak and the output would silently drop to 0.
+	decoded := `{"clusterId":"sentinel-then-real","clusterUrlId":"x","title":"Story",` +
+		`"currentRank":5,"peakRank":9999}` +
+		` middle ` +
+		`{"clusterId":"sentinel-then-real","peakRank":42}`
+	clusters, err := ExtractClusters(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clusters) != 1 {
+		t.Fatalf("got %d clusters, want 1", len(clusters))
+	}
+	if clusters[0].PeakRank != 42 {
+		t.Errorf("PeakRank = %d, want 42 (later legitimate value must not be blocked by 9999 sentinel)", clusters[0].PeakRank)
+	}
+}
+
 func TestExtractClustersPreservesLegitimatePeakRank(t *testing.T) {
 	// Any peakRank other than 9999 must pass through unchanged.
 	decoded := `{"clusterId":"legit-peak","clusterUrlId":"x","title":"Tracked",` +
