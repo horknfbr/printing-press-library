@@ -2234,6 +2234,62 @@
       }
     },
     {
+      "name": "eventbrite",
+      "category": "media-and-entertainment",
+      "api": "Eventbrite",
+      "description": "Every Eventbrite organizer endpoint, plus a local SQLite mirror of your events, orders",
+      "search_terms": [
+        "eventbrite",
+        "eventbrite-pp-cli",
+        "Every Eventbrite organizer endpoint, plus a local SQLite mirror of your events, orders, and attendees you can search offline — the cross-event search Eventbrite removed, restored over your own data.",
+        "Sales velocity board",
+        "sales-velocity",
+        "Ranks all your live events by tickets sold per day since on-sale and projects a sell-out date.",
+        "Repeat-attendee finder",
+        "repeat-attendees",
+        "Finds fans who bought into two or more of your events, across your whole synced history.",
+        "Discount-code performance",
+        "discount-performance",
+        "Per discount code: redemptions, type, and the redemption rate (share of the code's allotment used).",
+        "Multi-org client roll-up",
+        "org-rollup",
+        "Single pane across every organization your token can see: events count, tickets sold, gross, and top event per org.",
+        "Door roster + check-in gap",
+        "roster",
+        "Offline attendee roster for one event with checked-in vs not-yet, VIP and comp flags, door-sorted.",
+        "Capacity headroom rollup",
+        "capacity",
+        "Sold vs total capacity and percent remaining across all your live events at once.",
+        "Refund / cancellation rate",
+        "refund-rate",
+        "Refunded and cancelled order counts, refunded revenue, and the rate per event or across the org.",
+        "Top buyers by spend",
+        "top-buyers",
+        "Ranks ticket buyers by total spend across all your events, not just by how many events they attended.",
+        "Attendee contact export",
+        "fan-export",
+        "Exports unique attendee contacts (email, name, events attended, check-in status), deduped across all your events and filterable by event."
+      ],
+      "path": "library/media-and-entertainment/eventbrite",
+      "printer": "vinnyp",
+      "printer_name": "Vinny Pasceri",
+      "mcp": {
+        "binary": "eventbrite-pp-mcp",
+        "transports": [
+          "stdio",
+          "http"
+        ],
+        "tool_count": 99,
+        "public_tool_count": 0,
+        "auth_type": "bearer_token",
+        "env_vars": [
+          "EVENTBRITE_API_KEY"
+        ],
+        "mcp_ready": "full",
+        "spec_format": "openapi3"
+      }
+    },
+    {
       "name": "exchangerate-api",
       "category": "payments",
       "api": "Exchangerate Api",
