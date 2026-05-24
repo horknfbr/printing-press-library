@@ -374,7 +374,14 @@ func matchBalancedObject(s string, start int) int {
 }
 
 // mergeClusters returns the union of two cluster records observed for
-// the same clusterId. Non-zero fields from b override zero fields in a.
+// the same clusterId. Most fields use later-wins-when-nonzero, so b
+// fills in or enriches values on a. The four rank-bearing fields
+// (CurrentRank, PeakRank, PreviousRank, Delta) use first-non-zero-wins
+// instead: a non-zero accumulator is preserved, and b only fills in
+// when a is still zero. This keeps the main /ai leaderboard rank
+// (emitted first in the RSC stream) from being clobbered by a later
+// featured / weekly / pinned / sevenDaysStories section that assigns
+// the same cluster a different rank.
 func mergeClusters(a, b Cluster) Cluster {
 	if b.ClusterURLID != "" {
 		a.ClusterURLID = b.ClusterURLID
