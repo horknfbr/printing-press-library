@@ -233,6 +233,12 @@ func ExtractClusters(decoded string) ([]Cluster, error) {
 	}
 	out := make([]Cluster, 0, len(merged))
 	for _, c := range merged {
+		// PATCH: 9999 is Digg's internal sentinel for newly-detected clusters
+		// with no tracked all-time peak; normalize to 0 so the omitempty tag
+		// on PeakRank drops it from JSON output.
+		if c.PeakRank == 9999 {
+			c.PeakRank = 0
+		}
 		out = append(out, c)
 	}
 	return out, nil
@@ -389,16 +395,21 @@ func mergeClusters(a, b Cluster) Cluster {
 	if b.Topic != "" {
 		a.Topic = b.Topic
 	}
-	if b.CurrentRank != 0 {
+	// PATCH: rank-bearing fields use first-non-zero-wins precedence so later
+	// cross-section occurrences (featured / weekly / pinned / sevenDaysStories
+	// blocks in the RSC stream) cannot overwrite the main /ai leaderboard rank
+	// for the same cluster. Zero accumulator still accepts a later non-zero
+	// value so sparse-then-full enrichment is preserved.
+	if a.CurrentRank == 0 && b.CurrentRank != 0 {
 		a.CurrentRank = b.CurrentRank
 	}
-	if b.PeakRank != 0 {
+	if a.PeakRank == 0 && b.PeakRank != 0 {
 		a.PeakRank = b.PeakRank
 	}
-	if b.PreviousRank != 0 {
+	if a.PreviousRank == 0 && b.PreviousRank != 0 {
 		a.PreviousRank = b.PreviousRank
 	}
-	if b.Delta != 0 {
+	if a.Delta == 0 && b.Delta != 0 {
 		a.Delta = b.Delta
 	}
 	if b.GravityScore != 0 {
