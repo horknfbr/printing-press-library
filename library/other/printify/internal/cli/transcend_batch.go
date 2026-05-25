@@ -62,13 +62,14 @@ func buildPersonalizationBatch(templateFile, csvFile, outDir string) ([]personal
 		return nil, err
 	}
 	results := make([]personalizationBatchRow, 0, len(csvRows))
+	usedOutputNames := map[string]int{}
 	for index, row := range csvRows {
 		var manifest any
 		if err := json.Unmarshal(rawTemplate, &manifest); err != nil {
 			return nil, err
 		}
 		manifest = replaceManifestTokens(manifest, row)
-		outputName := ppSafeOutputName(row, index) + ".json"
+		outputName := uniqueBatchOutputName(ppSafeOutputName(row, index), usedOutputNames) + ".json"
 		outputPath := filepath.Join(outDir, outputName)
 		if err := ppWriteJSONFile(outputPath, manifest); err != nil {
 			return nil, err
@@ -82,6 +83,21 @@ func buildPersonalizationBatch(templateFile, csvFile, outDir string) ([]personal
 		})
 	}
 	return results, nil
+}
+
+func uniqueBatchOutputName(base string, used map[string]int) string {
+	if used[base] == 0 {
+		used[base] = 1
+		return base
+	}
+	for suffix := used[base] + 1; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", base, suffix)
+		if used[candidate] == 0 {
+			used[base] = suffix
+			used[candidate] = 1
+			return candidate
+		}
+	}
 }
 
 func readCSVRows(path string) ([]map[string]string, error) {

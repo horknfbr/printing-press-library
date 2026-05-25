@@ -112,6 +112,46 @@ func TestBuildPersonalizationBatchWritesExpandedManifest(t *testing.T) {
 	}
 }
 
+func TestBuildPersonalizationBatchUsesUniqueOutputNames(t *testing.T) {
+	dir := t.TempDir()
+	templatePath := filepath.Join(dir, "template.json")
+	csvPath := filepath.Join(dir, "rows.csv")
+	outDir := filepath.Join(dir, "out")
+	if err := os.WriteFile(templatePath, []byte(`{"title":"{{title}}","note":"{{text}}"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(csvPath, []byte("title,text\nCustom Mug,First\nCustom Mug,Second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := buildPersonalizationBatch(templatePath, csvPath, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected two batch rows, got %d", len(rows))
+	}
+	if rows[0].Output == rows[1].Output {
+		t.Fatalf("expected unique output paths, got %q", rows[0].Output)
+	}
+	if filepath.Base(rows[0].Output) != "custom-mug.json" || filepath.Base(rows[1].Output) != "custom-mug-2.json" {
+		t.Fatalf("unexpected output paths: %#v", rows)
+	}
+	for index, expectedNote := range []string{"First", "Second"} {
+		data, err := os.ReadFile(rows[index].Output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var manifest map[string]any
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if manifest["note"] != expectedNote {
+			t.Fatalf("unexpected manifest %d: %#v", index+1, manifest)
+		}
+	}
+}
+
 func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 	variants := []ppJSONObj{
 		{"id": "1", "title": "S", "cost": float64(1200)},
