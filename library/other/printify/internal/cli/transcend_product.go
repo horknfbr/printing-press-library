@@ -94,7 +94,10 @@ func newPlacementMatrixCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			uploads, _ := ppLoadObjectsFromFileOrStore(uploadsFile, dbPath, []string{"uploads-json", "uploads_json"}, 10000)
+			uploads, uploadsErr := ppLoadObjectsFromFileOrStore(uploadsFile, dbPath, []string{"uploads-json", "uploads_json"}, 10000)
+			if uploadsErr != nil && uploadsFile != "" {
+				return uploadsErr
+			}
 			rows := buildPlacementMatrix(product, uploads)
 			raw, err := json.Marshal(rows)
 			if err != nil {

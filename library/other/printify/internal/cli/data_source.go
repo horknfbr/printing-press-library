@@ -423,9 +423,10 @@ func resolveLocal(ctx context.Context, flags *rootFlags, hintWriter io.Writer, r
 		return data, prov, nil
 	}
 
-	// Get by ID — extract the last path segment as the ID
+	// Get by ID — extract the last path segment as the ID.
+	// Printify paths end with .json, while synced local IDs are stored without it.
 	parts := strings.Split(strings.TrimRight(path, "/"), "/")
-	id := parts[len(parts)-1]
+	id := strings.TrimSuffix(parts[len(parts)-1], ".json")
 
 	item, err := db.Get(resourceType, id)
 	if err != nil {

@@ -39,6 +39,30 @@ func TestBuildPlacementMatrixJoinsUploadNames(t *testing.T) {
 	}
 }
 
+func TestPlacementMatrixReturnsExplicitUploadsFileError(t *testing.T) {
+	dir := t.TempDir()
+	productPath := filepath.Join(dir, "product.json")
+	rawProduct, err := json.Marshal(sampleProduct())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(productPath, rawProduct, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	missingUploadsPath := filepath.Join(dir, "missing-uploads.json")
+	cmd := newPlacementMatrixCmd(&rootFlags{asJSON: true})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--product-file", productPath, "--uploads-file", missingUploadsPath})
+
+	err = cmd.Execute()
+
+	if err == nil || !strings.Contains(err.Error(), "missing-uploads.json") {
+		t.Fatalf("expected uploads load error, got %v", err)
+	}
+}
+
 func TestBuildProductDriftDetectsChangedTitle(t *testing.T) {
 	expected := ppJSONObj{"title": "Original", "blueprint_id": float64(384)}
 	actual := ppJSONObj{"title": "Changed", "blueprint_id": float64(384)}
