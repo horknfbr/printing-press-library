@@ -132,6 +132,15 @@ func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 	}
 }
 
+func TestCentsToDollarsConvertsSmallCentValues(t *testing.T) {
+	if ppRound2(ppCentsToDollars(99)) != 0.99 {
+		t.Fatalf("expected 99 cents to convert to $0.99")
+	}
+	if ppRound2(ppCentsToDollars(5)) != 0.05 {
+		t.Fatalf("expected 5 cents to convert to $0.05")
+	}
+}
+
 func TestLoadStoreObjectsReturnsListErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "empty.db")
 	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
@@ -179,6 +188,38 @@ func TestBuildFulfillmentRiskFlagsMissingShipment(t *testing.T) {
 	}
 	if rows[0].Risks[0] != "no shipment records" {
 		t.Fatalf("unexpected risks: %#v", rows[0].Risks)
+	}
+}
+
+func TestBuildFulfillmentRiskFlagsProductState(t *testing.T) {
+	orders := []ppJSONObj{{
+		"id":        "order_1",
+		"status":    "pending",
+		"shipments": []any{map[string]any{"carrier": "usps"}},
+		"line_items": []any{
+			map[string]any{"product_id": "prod_1", "variant_id": "101"},
+		},
+	}}
+	products := []ppJSONObj{{
+		"id":        "prod_1",
+		"visible":   false,
+		"is_locked": true,
+		"status":    "unpublished",
+	}}
+
+	rows := buildFulfillmentRisk(orders, products)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected one risk row, got %d", len(rows))
+	}
+	expectedRisks := []string{"product hidden", "product locked", "product unpublished"}
+	if len(rows[0].Risks) != len(expectedRisks) {
+		t.Fatalf("unexpected product state risks: %#v", rows[0].Risks)
+	}
+	for i, expected := range expectedRisks {
+		if rows[0].Risks[i] != expected {
+			t.Fatalf("unexpected product state risks: %#v", rows[0].Risks)
+		}
 	}
 }
 

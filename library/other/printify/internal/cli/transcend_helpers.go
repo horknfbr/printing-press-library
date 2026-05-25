@@ -227,11 +227,8 @@ func ppID(obj ppJSONObj) string {
 	return ppString(obj, "id", "product_id", "variant_id", "sku")
 }
 
-func ppMoneyCents(value float64) float64 {
-	if value > 0 && value == math.Trunc(value) {
-		return value / 100
-	}
-	return value
+func ppCentsToDollars(value float64) float64 {
+	return value / 100
 }
 
 func ppRound2(value float64) float64 {

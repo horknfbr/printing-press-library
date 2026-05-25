@@ -177,7 +177,7 @@ func buildCatalogMarginMatrix(variants, shipping []ppJSONObj, targetPrice float6
 	shippingCost := lowestShippingCost(shipping)
 	rows := make([]catalogMarginRow, 0, len(variants))
 	for _, variant := range variants {
-		cost := ppMoneyCents(ppFloat(variant, "cost", "price", "cost_cents"))
+		cost := ppCentsToDollars(ppFloat(variant, "cost", "price", "cost_cents"))
 		margin := targetPrice - cost - shippingCost
 		marginPercent := 0.0
 		if targetPrice > 0 {
@@ -200,7 +200,7 @@ func lowestShippingCost(shipping []ppJSONObj) float64 {
 	lowest := 0.0
 	for _, item := range shipping {
 		for _, key := range []string{"first_item", "cost", "price"} {
-			value := ppMoneyCents(ppFloat(item, key))
+			value := ppCentsToDollars(ppFloat(item, key))
 			if value > 0 && (lowest == 0 || value < lowest) {
 				lowest = value
 				break
@@ -241,9 +241,12 @@ func buildAssetReuse(products, uploads []ppJSONObj) []assetReuseRow {
 }
 
 func buildFulfillmentRisk(orders, products []ppJSONObj) []fulfillmentRiskRow {
-	productState := map[string]string{}
+	productRisks := map[string][]string{}
 	for _, product := range products {
-		productState[ppString(product, "id")] = ppString(product, "visible", "is_locked", "status")
+		productID := ppString(product, "id")
+		if productID != "" {
+			productRisks[productID] = productStateRisks(product)
+		}
 	}
 	var rows []fulfillmentRiskRow
 	for _, order := range orders {
@@ -264,7 +267,9 @@ func buildFulfillmentRisk(orders, products []ppJSONObj) []fulfillmentRiskRow {
 			risks := []string{}
 			if productID == "" {
 				risks = append(risks, "missing product id")
-			} else if _, ok := productState[productID]; !ok && len(products) > 0 {
+			} else if stateRisks, ok := productRisks[productID]; ok {
+				risks = append(risks, stateRisks...)
+			} else if len(products) > 0 {
 				risks = append(risks, "product not found locally")
 			}
 			if variantID == "" {
@@ -279,6 +284,21 @@ func buildFulfillmentRisk(orders, products []ppJSONObj) []fulfillmentRiskRow {
 		}
 	}
 	return rows
+}
+
+func productStateRisks(product ppJSONObj) []string {
+	risks := []string{}
+	if visible, ok := ppLookup(product, "visible").(bool); ok && !visible {
+		risks = append(risks, "product hidden")
+	}
+	if ppBool(product, "is_locked") {
+		risks = append(risks, "product locked")
+	}
+	status := strings.ToLower(ppString(product, "status"))
+	if status != "" && status != "published" && status != "visible" {
+		risks = append(risks, "product "+status)
+	}
+	return risks
 }
 
 func setKeys(values map[string]bool) []string {
