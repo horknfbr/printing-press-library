@@ -46,15 +46,15 @@ func RegisterTools(s *server.MCPServer) {
 	)
 	s.AddTool(
 		mcplib.NewTool("catalog_retrieve-alist-of-variants-of-ablueprint-from-aspecific-print-provider",
-			mcplib.WithDescription("Retrieves the list of of variants options for the Print Provider and Blueprint. Those form the set of options available for customization Product (Blueprint) on particular manufacturer (Print Provider). Required: blueprint_id, print_provider_id. Optional: show-out-of-stock . Returns the VariantsResponse."),
+			mcplib.WithDescription("Retrieves the list of of variants options for the Print Provider and Blueprint. Those form the set of options available for customization Product (Blueprint) on particular manufacturer (Print Provider). Required: blueprint_id, print_provider_id. Optional: show-out-of-stock. Returns the VariantsResponse."),
 			mcplib.WithString("blueprint_id", mcplib.Required(), mcplib.Description("Blueprint id")),
 			mcplib.WithString("print_provider_id", mcplib.Required(), mcplib.Description("Print provider id")),
-			mcplib.WithString("show-out-of-stock ", mcplib.Description("Depending on the value, it shows all variants or only those not out of stock.")),
+			mcplib.WithString("show-out-of-stock", mcplib.Description("Depending on the value, it shows all variants or only those not out of stock.")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandler("GET", "/v1/catalog/blueprints/{blueprint_id}/print_providers/{print_provider_id}/variants.json", true, false, nil, []mcpParamBinding{{PublicName: "blueprint_id", WireName: "blueprint_id", Location: "path"}, {PublicName: "print_provider_id", WireName: "print_provider_id", Location: "path"}, {PublicName: "show-out-of-stock ", WireName: "show-out-of-stock ", Location: "query"}}, []string{"blueprint_id", "print_provider_id"}),
+		makeAPIHandler("GET", "/v1/catalog/blueprints/{blueprint_id}/print_providers/{print_provider_id}/variants.json", true, false, nil, []mcpParamBinding{{PublicName: "blueprint_id", WireName: "blueprint_id", Location: "path"}, {PublicName: "print_provider_id", WireName: "print_provider_id", Location: "path"}, {PublicName: "show-out-of-stock", WireName: "show-out-of-stock", Location: "query"}}, []string{"blueprint_id", "print_provider_id"}),
 	)
 	s.AddTool(
 		mcplib.NewTool("catalog_retrieve-aspecific-blueprint",

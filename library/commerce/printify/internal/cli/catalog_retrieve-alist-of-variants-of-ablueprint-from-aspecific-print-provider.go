@@ -36,7 +36,7 @@ func newCatalogRetrieveAlistOfVariantsOfAblueprintFromAspecificPrintProviderCmd(
 			path = replacePathParam(path, "print_provider_id", args[1])
 			params := map[string]string{}
 			if flagShowOutOfStock != "" {
-				params["show-out-of-stock "] = fmt.Sprintf("%v", flagShowOutOfStock)
+				params["show-out-of-stock"] = fmt.Sprintf("%v", flagShowOutOfStock)
 			}
 			data, prov, err := resolveRead(cmd.Context(), c, flags, "catalog", false, path, params, nil, cmd.ErrOrStderr())
 			if err != nil {
