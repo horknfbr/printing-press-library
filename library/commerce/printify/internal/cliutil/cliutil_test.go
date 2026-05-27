@@ -666,6 +666,16 @@ func TestAdaptiveLimiter_RampStopsAtInitialCeiling(t *testing.T) {
 	}
 }
 
+func TestAdaptiveLimiter_RampInitializesMissingCeiling(t *testing.T) {
+	l := &AdaptiveLimiter{rate: 2.0, floor: 2.0, rampAfter: 1}
+	for i := 0; i < 100; i++ {
+		l.OnSuccess()
+	}
+	if got, want := l.Rate(), l.ceiling*0.9; got > want {
+		t.Errorf("Rate() after many successes = %v, want <= %v", got, want)
+	}
+}
+
 func TestAdaptiveLimiter_HalvesOnRateLimit(t *testing.T) {
 	l := NewAdaptiveLimiter(8.0)
 	startRate := l.Rate()
