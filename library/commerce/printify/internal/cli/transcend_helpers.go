@@ -49,7 +49,7 @@ func ppDecodeObjects(raw json.RawMessage) ([]ppJSONObj, error) {
 	if err := json.Unmarshal(raw, &wrapped); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"data", "items", "results", "variants", "shipping", "uploads", "orders", "products"} {
+	for _, key := range []string{"data", "items", "results", "variants", "shipping", "profiles", "uploads", "orders", "products"} {
 		if nested, ok := wrapped[key]; ok {
 			if err := json.Unmarshal(nested, &arr); err == nil {
 				return arr, nil

@@ -196,6 +196,26 @@ func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 	}
 }
 
+func TestCatalogMarginMatrixUsesProfilesEnvelopeAndNestedFirstItemCost(t *testing.T) {
+	variants, err := ppDecodeObjects(json.RawMessage(`{"variants":[{"id":"1","title":"S","cost":1200}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipping, err := ppDecodeObjects(json.RawMessage(`{"profiles":[{"first_item":{"cost":500,"currency":"USD"},"additional_items":{"cost":250,"currency":"USD"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := buildCatalogMarginMatrix(variants, shipping, 24.99)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected one margin row, got %d", len(rows))
+	}
+	if rows[0].Shipping != 5 || rows[0].EstimatedMargin != 7.99 {
+		t.Fatalf("unexpected margin row: %#v", rows[0])
+	}
+}
+
 func TestCentsToDollarsConvertsSmallCentValues(t *testing.T) {
 	if ppRound2(ppCentsToDollars(99)) != 0.99 {
 		t.Fatalf("expected 99 cents to convert to $0.99")

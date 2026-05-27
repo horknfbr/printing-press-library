@@ -200,7 +200,7 @@ func lowestShippingCost(shipping []ppJSONObj) float64 {
 	lowest := 0.0
 	for _, item := range shipping {
 		for _, key := range []string{"first_item", "cost", "price"} {
-			value := ppCentsToDollars(ppFloat(item, key))
+			value := shippingCostDollars(ppLookup(item, key))
 			if value > 0 && (lowest == 0 || value < lowest) {
 				lowest = value
 				break
@@ -208,6 +208,25 @@ func lowestShippingCost(shipping []ppJSONObj) float64 {
 		}
 	}
 	return lowest
+}
+
+func shippingCostDollars(value any) float64 {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"cost", "amount", "value"} {
+			if dollars := shippingCostDollars(ppLookup(ppJSONObj(typed), key)); dollars > 0 {
+				return dollars
+			}
+		}
+	case json.RawMessage:
+		var decoded any
+		if json.Unmarshal(typed, &decoded) == nil {
+			return shippingCostDollars(decoded)
+		}
+	default:
+		return ppCentsToDollars(ppFloat(ppJSONObj{"value": value}, "value"))
+	}
+	return 0
 }
 
 func buildAssetReuse(products, uploads []ppJSONObj) []assetReuseRow {
