@@ -27,6 +27,8 @@ type AdaptiveLimiter struct {
 	lastRequest time.Time // zero-value: first Wait() returns immediately; may reserve a future slot
 }
 
+const adaptiveLimiterMaxRampMultiplier = 4
+
 // NewAdaptiveLimiter returns a limiter starting at ratePerSec, or nil when
 // rate-limiting should be disabled. Methods on the nil limiter no-op.
 func NewAdaptiveLimiter(ratePerSec float64) *AdaptiveLimiter {
@@ -36,6 +38,7 @@ func NewAdaptiveLimiter(ratePerSec float64) *AdaptiveLimiter {
 	return &AdaptiveLimiter{
 		rate:      ratePerSec,
 		floor:     ratePerSec,
+		ceiling:   ratePerSec * adaptiveLimiterMaxRampMultiplier,
 		rampAfter: 10,
 	}
 }

@@ -226,6 +226,26 @@ func TestUpsertBatch_GenericFallbackList(t *testing.T) {
 	}
 }
 
+func TestUpsertUploadsJsonUsesUnderscoreResourceKey(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.UpsertUploadsJson(json.RawMessage(`{"id":"upload_1","file_name":"front.png"}`)); err != nil {
+		t.Fatalf("UpsertUploadsJson: %v", err)
+	}
+	items, err := s.List("uploads_json", 0)
+	if err != nil {
+		t.Fatalf("List uploads_json: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("List uploads_json returned %d items, want 1", len(items))
+	}
+}
+
 // TestUpsertBatch_ExtractFailuresReturnedForPerItemMisses pins the third
 // return value: items that survive JSON unmarshal but have no extractable
 // PK (templated override AND generic fallback both miss) bump

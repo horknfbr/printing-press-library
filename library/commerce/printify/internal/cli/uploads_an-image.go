@@ -23,8 +23,6 @@ func newUploadsAnImageCmd(flags *rootFlags) *cobra.Command {
 		Example:     "  printify-pp-cli uploads an-image",
 		Annotations: map[string]string{"pp:endpoint": "uploads.an-image", "pp:method": "POST", "pp:path": "/v1/uploads/images.json"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !stdinBody {
-			}
 			c, err := flags.newClient()
 			if err != nil {
 				return err

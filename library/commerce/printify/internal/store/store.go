@@ -1282,7 +1282,7 @@ func (s *Store) UpsertUploadsJson(data json.RawMessage) error {
 	}
 	defer tx.Rollback()
 
-	if err := s.upsertGenericResourceTx(tx, "uploads-json", id, data); err != nil {
+	if err := s.upsertGenericResourceTx(tx, "uploads_json", id, data); err != nil {
 		return err
 	}
 	if err := s.upsertUploadsJsonTx(tx, id, obj, data); err != nil {
