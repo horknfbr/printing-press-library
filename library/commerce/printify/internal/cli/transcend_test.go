@@ -152,6 +152,30 @@ func TestBuildPersonalizationBatchUsesUniqueOutputNames(t *testing.T) {
 	}
 }
 
+func TestBuildPersonalizationBatchFallsBackWhenSlugIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	templatePath := filepath.Join(dir, "template.json")
+	csvPath := filepath.Join(dir, "rows.csv")
+	outDir := filepath.Join(dir, "out")
+	if err := os.WriteFile(templatePath, []byte(`{"title":"{{title}}"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(csvPath, []byte("title\n!!!\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := buildPersonalizationBatch(templatePath, csvPath, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one batch row, got %d", len(rows))
+	}
+	if got := filepath.Base(rows[0].Output); got != "manifest-001.json" {
+		t.Fatalf("output path = %q, want manifest-001.json", got)
+	}
+}
+
 func TestBuildCatalogMarginMatrixComputesMargin(t *testing.T) {
 	variants := []ppJSONObj{
 		{"id": "1", "title": "S", "cost": float64(1200)},

@@ -985,6 +985,30 @@ func TestUpsertBatch_PopulatesArchiveJsonTable(t *testing.T) {
 	}
 }
 
+func TestUpsertBatch_PopulatesArchiveJsonTableForHyphenatedResource(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	items := []json.RawMessage{
+		json.RawMessage(`{"id": "test-001", "uploads_id": "test-parent-001"}`),
+	}
+	if _, _, err := s.UpsertBatch("archive-json", items); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+
+	var typed int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM "archive_json"`).Scan(&typed); err != nil {
+		t.Fatalf("count archive_json: %v", err)
+	}
+	if typed != len(items) {
+		t.Fatalf("archive_json count = %d, want %d", typed, len(items))
+	}
+}
+
 // TestUpsertBatch_TypedFailureDoesNotStrandArchiveJsonGeneric exercises
 // the savepoint isolation around the typed-table dispatch. The fixture omits
 // the NOT NULL parent FK column so the typed insert fails; the savepoint

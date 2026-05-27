@@ -256,7 +256,9 @@ func ppWriteJSONFile(path string, value any) error {
 func ppSafeOutputName(row map[string]string, index int) string {
 	for _, key := range []string{"slug", "handle", "sku", "title", "name", "id"} {
 		if value := strings.TrimSpace(row[key]); value != "" {
-			return ppSlug(value)
+			if slug := ppSlug(value); slug != "" {
+				return slug
+			}
 		}
 	}
 	return fmt.Sprintf("manifest-%03d", index+1)

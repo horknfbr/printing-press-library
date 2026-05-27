@@ -1415,7 +1415,7 @@ func (s *Store) UpsertBatch(resourceType string, items []json.RawMessage) (int, 
 			typedErr = s.upsertWebhooksTx(tx, id, obj, item)
 		case "webhooks_json":
 			typedErr = s.upsertWebhooksJsonTx(tx, id, obj, item)
-		case "archive_json":
+		case "archive_json", "archive-json":
 			typedErr = s.upsertArchiveJsonTx(tx, id, obj, item)
 		case "uploads-json":
 			typedErr = s.upsertUploadsJsonTx(tx, id, obj, item)
