@@ -41,6 +41,7 @@ type rootFlags struct {
 	dataSource    string
 	freshnessMeta any
 	throttleMode  string
+	reportDBPath  string
 
 	// deliverBuf captures command output when --deliver is set to a
 	// non-stdout sink. Flushed to the sink after Execute returns.
