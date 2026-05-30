@@ -25,7 +25,7 @@ func newSunoGrepCmd(flags *rootFlags) *cobra.Command {
 		Use:   "grep <phrase>",
 		Short: "Full-text search local clips by lyric/prompt/tag/title phrase",
 		Long: "Find clips by remembered lyric/prompt phrases via local full-text match.\n\n" +
-			"Searches the local FTS5 index over your synced clips (title + tags). " +
+			"Searches the local FTS5 index over your synced clips (title, tags, and lyrics/prompt). " +
 			"Do NOT use for live server-side title search; use 'search' instead.",
 		Example:     "  suno-pp-cli grep \"midnight drive\"\n  suno-pp-cli grep synthwave --limit 5 --json",
 		Annotations: map[string]string{"pp:data-source": "local", "mcp:read-only": "true"},
@@ -91,7 +91,7 @@ type grepMatch struct {
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// grepClips runs an FTS5 MATCH over the clips_fts index (title + tags) and
+// grepClips runs an FTS5 MATCH over the clips_fts index (title, tags, prompt) and
 // joins back to the clips table for the id. snippet() highlights the match.
 func grepClips(db *store.Store, phrase string, limit int) ([]grepMatch, error) {
 	out := make([]grepMatch, 0)

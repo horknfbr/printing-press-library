@@ -638,6 +638,48 @@ func TestMigrate_AddsColumnsOnUpgrade_Clips(t *testing.T) {
 	}
 }
 
+// TestMigrate_ClipsFTSIndexesPrompt is regression coverage for the v3 upgrade:
+// the legacy clips_fts indexed only title+tags, so `grep` could not match
+// lyrics. Opening a v2 database with a prompt-bearing clip must drop and rebuild
+// clips_fts with the prompt column so the existing clip's lyrics become
+// searchable.
+func TestMigrate_ClipsFTSIndexesPrompt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	seed := []string{
+		`CREATE TABLE "clips" ("id" TEXT PRIMARY KEY,"data" JSON NOT NULL,"synced_at" DATETIME,"title" TEXT,"tags" TEXT,"prompt" TEXT)`,
+		`CREATE VIRTUAL TABLE "clips_fts" USING fts5("title","tags",content='clips',content_rowid='rowid')`,
+		`CREATE TRIGGER "clips_ai" AFTER INSERT ON "clips" BEGIN INSERT INTO "clips_fts"(rowid,"title","tags") VALUES (new.rowid,new."title",new."tags"); END`,
+		`INSERT INTO "clips"("id","data","title","tags","prompt") VALUES ('c1','{"id":"c1"}','Untitled','rock','midnight rain on the highway')`,
+		`PRAGMA user_version = 2`,
+	}
+	for _, stmt := range seed {
+		if _, err := raw.Exec(stmt); err != nil {
+			raw.Close()
+			t.Fatalf("seed v2 db: %v", err)
+		}
+	}
+	raw.Close()
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open/migrate v2 db: %v", err)
+	}
+	defer s.Close()
+
+	res, err := s.SearchClips("midnight rain", 10)
+	if err != nil {
+		t.Fatalf("search by lyric: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("lyric search matched %d clips after v2->v3 migrate, want 1 (prompt not rebuilt into clips_fts)", len(res))
+	}
+}
+
 // TestMigrate_AddsColumnsOnUpgrade_Lyrics verifies that opening a
 // database created by an older binary succeeds and adds newly generated
 // columns before CREATE INDEX runs against the pre-existing table. Regression

@@ -42,7 +42,7 @@ func IsUUID(s string) bool {
 // shape — adding columns, dropping indexes, changing FTS5 tokenizers —
 // so an older binary refuses to open a newer database rather than silently
 // producing wrong results against a schema it cannot read.
-const StoreSchemaVersion = 2
+const StoreSchemaVersion = 3
 
 const resourcesFTSCreateSQL = `CREATE VIRTUAL TABLE IF NOT EXISTS resources_fts USING fts5(
 	id, resource_type, content, tokenize='porter unicode61'
@@ -74,11 +74,12 @@ func Open(dbPath string) (*Store, error) {
 // The file: URI prefix is load-bearing: modernc.org/sqlite only honors
 // SQLite's URI query parameters (mode, cache, etc.) when the DSN starts
 // with "file:". Without the prefix, "?mode=ro" is silently dropped and
-// the connection opens read-write. Underscore-prefixed driver pragmas
-// (_journal_mode, _busy_timeout, etc.) work either way; they're parsed
-// out of the DSN by the driver before sqlite3_open_v2.
+// the connection opens read-write. PRAGMAs use modernc's "_pragma=name(value)"
+// form — the mattn/go-sqlite3 "_busy_timeout=..." underscore form is silently
+// ignored by modernc, leaving the pragma at its default. journal_mode is
+// omitted here because a read-only handle cannot switch journal modes.
 func OpenReadOnly(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_temp_store=MEMORY&_mmap_size=268435456")
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)")
 	if err != nil {
 		return nil, fmt.Errorf("opening database (read-only): %w", err)
 	}
@@ -95,7 +96,7 @@ func OpenWithContext(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON&_temp_store=MEMORY&_mmap_size=268435456")
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -342,22 +343,23 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE VIRTUAL TABLE IF NOT EXISTS "clips_fts" USING fts5(
 			"title",
 			"tags",
+			"prompt",
 			content='clips',
 			content_rowid='rowid'
 		)`,
 		`CREATE TRIGGER IF NOT EXISTS "clips_ai" AFTER INSERT ON "clips" BEGIN
-			INSERT INTO "clips_fts"(rowid, "title", "tags")
-			VALUES (new.rowid,new."title", new."tags");
+			INSERT INTO "clips_fts"(rowid, "title", "tags", "prompt")
+			VALUES (new.rowid,new."title", new."tags", new."prompt");
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS "clips_ad" AFTER DELETE ON "clips" BEGIN
-			INSERT INTO "clips_fts"("clips_fts", rowid, "title", "tags")
-			VALUES ('delete', old.rowid,old."title", old."tags");
+			INSERT INTO "clips_fts"("clips_fts", rowid, "title", "tags", "prompt")
+			VALUES ('delete', old.rowid,old."title", old."tags", old."prompt");
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS "clips_au" AFTER UPDATE ON "clips" BEGIN
-			INSERT INTO "clips_fts"("clips_fts", rowid, "title", "tags")
-			VALUES ('delete', old.rowid,old."title", old."tags");
-			INSERT INTO "clips_fts"(rowid, "title", "tags")
-			VALUES (new.rowid,new."title", new."tags");
+			INSERT INTO "clips_fts"("clips_fts", rowid, "title", "tags", "prompt")
+			VALUES ('delete', old.rowid,old."title", old."tags", old."prompt");
+			INSERT INTO "clips_fts"(rowid, "title", "tags", "prompt")
+			VALUES (new.rowid,new."title", new."tags", new."prompt");
 		END`,
 		`CREATE TABLE IF NOT EXISTS "lyrics" (
 			"id" TEXT PRIMARY KEY,
@@ -489,12 +491,38 @@ func (s *Store) migrate(ctx context.Context) error {
 			}
 		}
 
+		// v3: clips_fts gained a "prompt" column so `grep` can match lyrics.
+		// Drop the legacy FTS table and its sync triggers on existing
+		// databases; the idempotent CREATE ... IF NOT EXISTS statements below
+		// recreate them with the new column set, and the rebuild after the
+		// slice repopulates the index from existing clip rows.
+		if current > 0 && current < 3 {
+			for _, stmt := range []string{
+				`DROP TRIGGER IF EXISTS "clips_ai"`,
+				`DROP TRIGGER IF EXISTS "clips_ad"`,
+				`DROP TRIGGER IF EXISTS "clips_au"`,
+				`DROP TABLE IF EXISTS "clips_fts"`,
+			} {
+				if _, err := conn.ExecContext(ctx, stmt); err != nil {
+					return fmt.Errorf("dropping legacy clips_fts: %w", err)
+				}
+			}
+		}
+
 		if err := s.backfillColumns(ctx, conn); err != nil {
 			return fmt.Errorf("backfilling columns: %w", err)
 		}
 		for _, m := range migrations {
 			if _, err := conn.ExecContext(ctx, m); err != nil {
 				return fmt.Errorf("migration failed: %w", err)
+			}
+		}
+		// v3: repopulate clips_fts (now including "prompt") from existing clip
+		// rows. Triggers only cover future writes, so an in-place upgrade needs
+		// an explicit external-content rebuild.
+		if current > 0 && current < 3 {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO "clips_fts"("clips_fts") VALUES('rebuild')`); err != nil {
+				return fmt.Errorf("rebuilding clips_fts: %w", err)
 			}
 		}
 		// Stamp the schema version. On a fresh DB this writes the current
