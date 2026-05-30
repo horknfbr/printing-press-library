@@ -30,6 +30,8 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		{"pragma rejected", "PRAGMA user_version = 9", true},
 		{"multiple statements rejected", "SELECT 1; DROP TABLE clips", true},
 		{"with-then-delete rejected", "WITH t AS (SELECT id FROM clips) DELETE FROM clips", true},
+		{"with-then-delete newline-bypass rejected", "WITH t AS (SELECT 1) DELETE\nFROM clips WHERE 1=1", true},
+		{"with-then-insert tab-bypass rejected", "WITH t AS (SELECT 1) INSERT\tINTO clips VALUES (1)", true},
 		{"comment-hidden write rejected", "SELECT 1 -- ok\n; DELETE FROM clips", true},
 		{"empty rejected", "   ", true},
 		{"non-select rejected", "EXPLAIN SELECT 1", true},

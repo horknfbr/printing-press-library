@@ -68,6 +68,7 @@ func syncSunoClips(ctx context.Context, c sunoClipsClient, db *store.Store, devi
 
 	headers := client.SunoDynamicHeaders(deviceID)
 	total := 0
+	completed := false
 	for page := 1; page <= maxPages; page++ {
 		body := map[string]any{"limit": sunoFeedPageLimit}
 		if cursor != "" {
@@ -111,13 +112,18 @@ func syncSunoClips(ctx context.Context, c sunoClipsClient, db *store.Store, devi
 		_ = db.SaveSyncState(sunoClipsResource, next, total)
 
 		if !feed.HasMore || next == "" {
+			completed = true
 			break
 		}
 		cursor = next
 	}
 
-	// Clear the resume cursor on a clean full walk so the next run starts fresh.
-	_ = db.SaveSyncState(sunoClipsResource, "", total)
+	// Clear the resume cursor only after a clean full walk (the feed reported no
+	// more pages). A page-capped (--max-pages) walk leaves the last cursor saved
+	// inside the loop so the next incremental run resumes from where it stopped.
+	if completed {
+		_ = db.SaveSyncState(sunoClipsResource, "", total)
+	}
 	return total, nil
 }
 

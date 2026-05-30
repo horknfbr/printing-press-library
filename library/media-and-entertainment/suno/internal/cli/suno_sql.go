@@ -44,7 +44,11 @@ func newSunoSQLCmd(flags *rootFlags) *cobra.Command {
 				return usageErr(err)
 			}
 
-			db, err := store.OpenWithContext(cmd.Context(), dbPath)
+			// Open read-only: mode=ro enforces read-only at the SQLite driver
+			// level, rejecting direct and CTE-wrapped writes even if a query
+			// were to slip past validateReadOnlySQL. The app-level validator
+			// stays as a friendly pre-check.
+			db, err := store.OpenReadOnly(dbPath)
 			if err != nil {
 				return fmt.Errorf("opening local database: %w\nRun 'suno-pp-cli sync' first.", err)
 			}
@@ -95,7 +99,10 @@ func validateReadOnlySQL(raw string) error {
 		trimmed = strings.TrimSpace(trimmed[:idx])
 	}
 
-	lower := strings.ToLower(trimmed)
+	// Collapse every whitespace run to a single space so the write-keyword
+	// scan below cannot be bypassed by a newline or tab after the keyword
+	// (e.g. "WITH t AS (SELECT 1) DELETE\nFROM clips").
+	lower := strings.Join(strings.Fields(strings.ToLower(trimmed)), " ")
 	if !strings.HasPrefix(lower, "select") && !strings.HasPrefix(lower, "with") {
 		return fmt.Errorf("only read-only SELECT (or WITH ... SELECT) queries are allowed")
 	}
