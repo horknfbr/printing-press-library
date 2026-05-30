@@ -8,11 +8,12 @@ import (
 )
 
 func newClipsCmd(flags *rootFlags) *cobra.Command {
+	// PATCH(suno-surface-core-commands): visible in top-level --help; managing
+	// your songs (incl. WAV via convert-wav/wav-url) is a primary use case.
 	cmd := &cobra.Command{
-		Use:    "clips",
-		Short:  "Your Suno songs (clips) — generate, list, fetch, manage",
-		Hidden: true,
-		RunE:   parentNoSubcommandRunE(flags),
+		Use:   "clips",
+		Short: "Your Suno songs (clips) — list, fetch, manage, stems, WAV",
+		RunE:  parentNoSubcommandRunE(flags),
 	}
 
 	cmd.AddCommand(newClipsAlignedLyricsCmd(flags))

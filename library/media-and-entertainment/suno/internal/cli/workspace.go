@@ -8,11 +8,13 @@ import (
 )
 
 func newWorkspaceCmd(flags *rootFlags) *cobra.Command {
+	// PATCH(suno-surface-core-commands): visible in top-level --help and aliased
+	// as "workspace" since users think of Suno projects as workspaces.
 	cmd := &cobra.Command{
-		Use:    "project",
-		Short:  "Workspaces (Suno 'projects') — organize your tracks into collections",
-		Hidden: true,
-		RunE:   parentNoSubcommandRunE(flags),
+		Use:     "project",
+		Aliases: []string{"workspace"},
+		Short:   "Workspaces (Suno 'projects') — organize your tracks into collections",
+		RunE:    parentNoSubcommandRunE(flags),
 	}
 
 	cmd.AddCommand(newWorkspaceCreateCmd(flags))

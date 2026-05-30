@@ -6,15 +6,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newGenerateCmd is the parent for music/lyrics/video generation. The parent is
-// Hidden so it stays out of the top-level --help list (matching the clips and
-// billing groups), while every subcommand still resolves normally.
+// newGenerateCmd is the parent for music/lyrics/video generation. It is visible
+// in the top-level --help because creating a track is the CLI's primary use case;
+// every subcommand resolves under it.
 func newGenerateCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "generate",
-		Short:  "Music, lyrics, and video generation jobs",
-		Hidden: true,
-		RunE:   parentNoSubcommandRunE(flags),
+		Use:   "generate",
+		Short: "Create tracks: music, lyrics, and video generation jobs",
+		RunE:  parentNoSubcommandRunE(flags),
 	}
 
 	// Hand-authored, captcha-aware generation/transform commands.

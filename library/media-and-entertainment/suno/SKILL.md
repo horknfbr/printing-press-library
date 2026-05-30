@@ -1,7 +1,7 @@
 ---
 name: pp-suno
 description: "The correct, offline-first Suno CLI — every feature the abandoned clients have, plus a local SQLite library Trigger phrases: `generate a song with suno`, `make music with suno`, `search my suno library`, `download my suno tracks`, `download a wav from suno`, `organize my suno tracks into a workspace`, `what are my top suno songs`, `use suno`, `run suno`."
-author: "horknfbr"
+author: "Matt Van Horn"
 license: "Apache-2.0"
 argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
