@@ -136,6 +136,28 @@
         }
       ],
       "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2578"
+    },
+    {
+      "id": "everbee-publish-review-hardening",
+      "summary": "Hardened redirect auth handling and removed no-op auto-refresh overrides after publish review.",
+      "reason": "Greptile flagged credential re-injection after cross-host redirect bounces and redundant per-resource stale windows that matched the global default.",
+      "files": [
+        "internal/client/client.go",
+        "internal/client/client_redirect_test.go",
+        "internal/cli/auto_refresh.go"
+      ],
+      "validated_outcome": "go test ./internal/client ./internal/cli passed in the source checkout and packaged library copy; go build ./... passed in the packaged library copy.",
+      "deferred_to_upstream": [
+        {
+          "feature": "Generated HTTP client redirect handling should compare against the immediately previous redirect hop before re-adding auth.",
+          "reason": "This security hardening belongs in generated runtime code so future CLIs do not need local review patches."
+        },
+        {
+          "feature": "Generator should omit per-resource cache freshness overrides when they equal the global stale-after default.",
+          "reason": "No-op generated overrides confuse review and carry no runtime behavior."
+        }
+      ],
+      "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2577"
     }
   ]
 }

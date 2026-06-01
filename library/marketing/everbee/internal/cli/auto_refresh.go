@@ -57,15 +57,6 @@ var readCommandResources = map[string][]string{
 func cachePolicy() cliutil.Policy {
 	staleAfter := 6 * time.Hour
 	perResource := map[string]time.Duration{}
-	if d, err := time.ParseDuration("6h"); err == nil {
-		perResource["keyword_research"] = d
-	}
-	if d, err := time.ParseDuration("6h"); err == nil {
-		perResource["product_analytics"] = d
-	}
-	if d, err := time.ParseDuration("6h"); err == nil {
-		perResource["shops"] = d
-	}
 	envOptOut := "EVERBEE_NO_AUTO_REFRESH"
 	return cliutil.Policy{
 		StaleAfter:   staleAfter,

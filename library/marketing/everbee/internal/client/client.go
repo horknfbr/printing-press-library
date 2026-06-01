@@ -116,11 +116,10 @@ func New(cfg *config.Config, timeout time.Duration, rateLimit float64) *Client {
 			// "Moved Permanently" body back to the caller.
 			return errors.New("stopped after 10 redirects")
 		}
-		// Same-host gate mirrors Go's shouldCopyHeaderOnRedirect: a
-		// cross-domain 3xx (open redirect or partner handoff) must not
-		// receive the auth credential, even though we are inside
-		// CheckRedirect where Go's automatic stripping has already run.
-		if req.URL.Host == via[0].URL.Host {
+		// Same-host gate allows auth only when the immediately preceding
+		// hop stayed on the same host. A cross-domain bounce must not
+		// regain credentials by redirecting back to the original host.
+		if req.URL.Host == via[len(via)-1].URL.Host {
 			if h, err := c.authHeader(req.Context()); err == nil && h != "" {
 				req.Header.Set("x-access-token", h)
 			}
