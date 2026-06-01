@@ -25,7 +25,7 @@ func newOpportunityCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "opportunity",
 		Short:   "Rank EverBee product and keyword opportunities",
-		Example: strings.Trim("\n  everbee-pp-cli opportunity shortlist --query=teacher-gift --no-refresh --json\n", "\n"),
+		Example: strings.Trim("\n  everbee-pp-cli opportunity shortlist --query=teacher-gift --json\n", "\n"),
 		RunE:    parentNoSubcommandRunE(flags),
 	}
 	cmd.AddCommand(newOpportunityShortlistCmd(flags))
@@ -133,7 +133,7 @@ func newNicheCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "niche",
 		Short:   "Score Etsy niches from EverBee snapshots",
-		Example: strings.Trim("\n  everbee-pp-cli niche score --keyword=teacher-gift --no-refresh --json\n", "\n"),
+		Example: strings.Trim("\n  everbee-pp-cli niche score --keyword=teacher-gift --json\n", "\n"),
 		RunE:    parentNoSubcommandRunE(flags),
 	}
 	cmd.AddCommand(newNicheScoreCmd(flags))
@@ -216,7 +216,7 @@ func newTagsInsightsCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "tags",
 		Short:   "Analyze EverBee tag gaps",
-		Example: strings.Trim("\n  everbee-pp-cli tags gap --query=teacher-gift --no-refresh --json\n", "\n"),
+		Example: strings.Trim("\n  everbee-pp-cli tags gap --query=teacher-gift --json\n", "\n"),
 		RunE:    parentNoSubcommandRunE(flags),
 	}
 	cmd.AddCommand(newTagsGapCmd(flags))
@@ -382,7 +382,7 @@ func newListingInsightsCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "listing",
 		Short:   "Audit listings against EverBee research context",
-		Example: strings.Trim("\n  everbee-pp-cli listing audit --listing-id=123456789 --no-refresh --json\n", "\n"),
+		Example: strings.Trim("\n  everbee-pp-cli listing audit --listing-id=123456789 --json\n", "\n"),
 		RunE:    parentNoSubcommandRunE(flags),
 	}
 	cmd.AddCommand(newListingAuditCmd(flags))

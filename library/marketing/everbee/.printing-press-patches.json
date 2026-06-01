@@ -90,6 +90,46 @@
       "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2577"
     },
     {
+      "id": "everbee-publish-review-hardening",
+      "summary": "Hardened redirect auth handling, refresh persistence fallback, and auto-refresh policy after publish review.",
+      "reason": "Greptile flagged credential re-injection after cross-host redirect bounces, dropping fresh API data when snapshot persistence fails, and redundant per-resource stale windows that matched the global default.",
+      "files": [
+        "internal/client/client.go",
+        "internal/client/client_redirect_test.go",
+        "internal/cli/auto_refresh.go",
+        "internal/cli/everbee_research_runtime.go",
+        "internal/cli/everbee_research_runtime_test.go"
+      ],
+      "validated_outcome": "go test ./... and go vet ./... passed in the source checkout and packaged library copy; govulncheck ./... passed in the packaged library copy.",
+      "deferred_to_upstream": [
+        {
+          "feature": "Generated HTTP client redirect handling should compare against the immediately previous redirect hop before re-adding auth.",
+          "reason": "This security hardening belongs in generated runtime code so future CLIs do not need local review patches."
+        },
+        {
+          "feature": "Generated research refresh runtime should preserve usable fetched evidence when snapshot persistence fails.",
+          "reason": "A local cache write failure should warn while still returning live API data to the command result."
+        },
+        {
+          "feature": "Generator should omit per-resource cache freshness overrides when they equal the global stale-after default.",
+          "reason": "No-op generated overrides confuse review and carry no runtime behavior."
+        }
+      ],
+      "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2577"
+    },
+    {
+      "id": "live-first-mcp-research-tools",
+      "summary": "Made MCP research/search guidance live-first with targeted local caching instead of sync-first.",
+      "reason": "EverBee tools should use current live API data for requested research slices, storing returned evidence locally for repeated analysis without bulk-syncing all records.",
+      "files": [
+        "internal/mcp/search.go",
+        "internal/mcp/tools.go",
+        "internal/mcp/tools_test.go",
+        "internal/cli/everbee_insights.go"
+      ],
+      "validated_outcome": "go test ./internal/mcp ./internal/cli, go test ./..., go vet ./..., go build ./..., and git diff --check passed."
+    },
+    {
       "id": "everbee-publish-module-imports",
       "summary": "Rewrote packaged self-imports to the public library module path.",
       "reason": "publish package updated go.mod but left generated imports pointing at the local everbee-pp-cli module path, causing the library copy to fail go build.",
@@ -119,16 +159,18 @@
         "internal/cli/sync_hint_test.go",
         "internal/cli/sync_numeric_id_test.go",
         "internal/client/client.go",
+        "internal/client/client_redirect_test.go",
         "internal/client/client_verify_short_circuit_test.go",
         "internal/config/config.go",
         "internal/mcp/cobratree/cli_path.go",
         "internal/mcp/intents.go",
+        "internal/mcp/search.go",
         "internal/mcp/tools.go",
         "internal/research/normalize.go",
         "internal/research/store.go",
         "internal/research/store_test.go"
       ],
-      "validated_outcome": "go build ./... and govulncheck ./... pass inside library/marketing/everbee after import rewrite.",
+      "validated_outcome": "go test ./..., go vet ./..., go build ./..., and govulncheck ./... pass inside library/marketing/everbee after import rewrite.",
       "deferred_to_upstream": [
         {
           "feature": "cli-printing-press publish package rewrites generated self-imports when --module-path changes the module path.",
@@ -136,34 +178,6 @@
         }
       ],
       "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2578"
-    },
-    {
-      "id": "everbee-publish-review-hardening",
-      "summary": "Hardened redirect auth handling, refresh persistence fallback, and auto-refresh policy after publish review.",
-      "reason": "Greptile flagged credential re-injection after cross-host redirect bounces, dropping fresh API data when snapshot persistence fails, and redundant per-resource stale windows that matched the global default.",
-      "files": [
-        "internal/client/client.go",
-        "internal/client/client_redirect_test.go",
-        "internal/cli/auto_refresh.go",
-        "internal/cli/everbee_research_runtime.go",
-        "internal/cli/everbee_research_runtime_test.go"
-      ],
-      "validated_outcome": "go test ./... and go vet ./... passed in the source checkout and packaged library copy; govulncheck ./... passed in the packaged library copy.",
-      "deferred_to_upstream": [
-        {
-          "feature": "Generated HTTP client redirect handling should compare against the immediately previous redirect hop before re-adding auth.",
-          "reason": "This security hardening belongs in generated runtime code so future CLIs do not need local review patches."
-        },
-        {
-          "feature": "Generated research refresh runtime should preserve usable fetched evidence when snapshot persistence fails.",
-          "reason": "A local cache write failure should warn while still returning live API data to the command result."
-        },
-        {
-          "feature": "Generator should omit per-resource cache freshness overrides when they equal the global stale-after default.",
-          "reason": "No-op generated overrides confuse review and carry no runtime behavior."
-        }
-      ],
-      "upstream_issue": "https://github.com/mvanhorn/cli-printing-press/issues/2577"
     }
   ]
 }

@@ -91,18 +91,18 @@ func RegisterTools(s *server.MCPServer) {
 	// Search tool — faster than iterating list endpoints for finding specific items
 	s.AddTool(
 		mcplib.NewTool("search",
-			mcplib.WithDescription("Full-text search across all synced data. Faster than paginating list endpoints. Requires sync first."),
-			mcplib.WithString("query", mcplib.Required(), mcplib.Description("Search query (supports FTS5 syntax: AND, OR, NOT, quotes for phrases)")),
+			mcplib.WithDescription("Search EverBee live data for the requested query, cache returned records locally, and fall back to local FTS only when live access is unavailable."),
+			mcplib.WithString("query", mcplib.Required(), mcplib.Description("EverBee search query")),
 			mcplib.WithNumber("limit", mcplib.Description("Max results (default 25)")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 		),
 		handleSearch,
 	)
-	// SQL tool — ad-hoc analysis on synced data without API calls
+	// SQL tool — ad-hoc analysis on cached data without API calls
 	s.AddTool(
 		mcplib.NewTool("sql",
-			mcplib.WithDescription("Run read-only SQL against local database. Use for ad-hoc analysis, aggregations, and joins across synced resources. Requires sync first."),
+			mcplib.WithDescription("Run read-only SQL against the local cache/snapshots. Use after targeted live pulls for offline analysis, aggregations, history, and joins."),
 			mcplib.WithString("query", mcplib.Required(), mcplib.Description("SQL query (SELECT or WITH...SELECT). Tables match resource names.")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
@@ -329,33 +329,6 @@ func dbPath() string {
 // Note: MCP tools use their own dbPath() because they are in a separate package (main, not cli).
 // The CLI's defaultDBPath() in the cli package uses the same canonical path.
 
-func handleSearch(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	args := req.GetArguments()
-	query, ok := args["query"].(string)
-	if !ok || query == "" {
-		return mcplib.NewToolResultError("query is required"), nil
-	}
-
-	limit := 25
-	if v, ok := args["limit"].(float64); ok && v > 0 {
-		limit = int(v)
-	}
-
-	db, err := store.OpenReadOnly(dbPath())
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("opening database: %v", err)), nil
-	}
-	defer db.Close()
-
-	results, err := db.Search(query, limit)
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
-	}
-
-	data, _ := json.MarshalIndent(results, "", "  ")
-	return mcplib.NewToolResultText(string(data)), nil
-}
-
 // validateReadOnlyQuery gates the MCP sql tool. The agent contract advertised
 // to the host is ReadOnlyHintAnnotation(true); a false annotation on a
 // mutating tool lets MCP hosts auto-approve writes and is treated as a real
@@ -513,31 +486,31 @@ func handleContext(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToo
 		"query_tips": []string{
 			"Pagination uses cursor-based paging. Pass page parameter for subsequent pages.",
 			"Control page size with the per_page parameter (default 100).",
-			"Use the sql tool for ad-hoc analysis on synced data. Run sync first to populate the local database.",
-			"Use the search tool for full-text search across all synced resources. Faster than iterating list endpoints.",
-			"Prefer sql/search over repeated API calls when the data is already synced.",
+			"Use typed endpoint tools and command-mirror research commands for current EverBee data; they perform targeted live pulls instead of requiring a bulk sync.",
+			"Use the search tool for live EverBee keyword search. It caches returned records and falls back to local FTS only when live access is unavailable.",
+			"Use the sql tool for repeated manipulation, joins, and historical analysis over cached research/snapshots after targeted live pulls.",
 		},
 		// Command-mirror capabilities are exposed through MCP by shelling out
 		// to the companion CLI binary.
 		"command_mirror_capabilities": []map[string]string{
-			{"name": "Opportunity Shortlist", "command": "opportunity shortlist", "description": "Rank Etsy product opportunities by combining product analytics, keyword demand, competition, and local trend history.", "rationale": "Requires joining EverBee product, keyword, tag, and snapshot data that the app exposes as separate workflows.", "via": "mcp-command-mirror"},
-			{"name": "Niche Score", "command": "niche score", "description": "Score a niche by weighing search demand, competition, product saturation, pricing, and trend movement.", "rationale": "Requires local joins across keyword research, product analytics, and historical snapshots.", "via": "mcp-command-mirror"},
-			{"name": "Shop Gaps", "command": "shop gaps", "description": "Find competitor shop openings from product mix, pricing bands, tags, and keyword coverage.", "rationale": "Requires correlating shop analyzer output with product and keyword history.", "via": "mcp-command-mirror"},
-			{"name": "Tag Gap", "command": "tags gap", "description": "Compare winning listing tags against a target shop or keyword set to reveal missing SEO coverage.", "rationale": "Requires matching product tags, keyword scores, and local shop/tag history.", "via": "mcp-command-mirror"},
-			{"name": "Keyword Clusters", "command": "keywords cluster", "description": "Group related keyword suggestions by term overlap, demand, competition, and opportunity score.", "rationale": "Requires local keyword storage, FTS, and clustering across repeated EverBee pulls.", "via": "mcp-command-mirror"},
+			{"name": "Opportunity Shortlist", "command": "opportunity shortlist", "description": "Rank Etsy product opportunities by combining product analytics, keyword demand, competition, and trend history.", "rationale": "Uses targeted EverBee refreshes and cached research slices to join product, keyword, tag, and snapshot evidence without bulk-syncing all records.", "via": "mcp-command-mirror"},
+			{"name": "Niche Score", "command": "niche score", "description": "Score a niche by weighing search demand, competition, product saturation, pricing, and trend movement.", "rationale": "Refreshes the relevant keyword/product slice from EverBee when stale, then reuses cached snapshots for scoring and history.", "via": "mcp-command-mirror"},
+			{"name": "Shop Gaps", "command": "shop gaps", "description": "Find competitor shop openings from product mix, pricing bands, tags, and keyword coverage.", "rationale": "Correlates targeted shop analyzer output with cached product and keyword research for the requested shop.", "via": "mcp-command-mirror"},
+			{"name": "Tag Gap", "command": "tags gap", "description": "Compare winning listing tags against a target shop or keyword set to reveal missing SEO coverage.", "rationale": "Matches current EverBee product tags and keyword scores with cached research history for the requested query.", "via": "mcp-command-mirror"},
+			{"name": "Keyword Clusters", "command": "keywords cluster", "description": "Group related keyword suggestions by term overlap, demand, competition, and opportunity score.", "rationale": "Pulls the relevant keyword suggestions from EverBee when needed, then clusters the cached result set for repeated analysis.", "via": "mcp-command-mirror"},
 			{"name": "Trend Diff", "command": "trends diff", "description": "Compare saved research snapshots to show which products, shops, or keywords moved over time.", "rationale": "Requires local historical snapshots; current UI tables cannot produce agent-ready diffs alone.", "via": "mcp-command-mirror"},
 			{"name": "Competitor Watch", "command": "competitors watch", "description": "Detect competitor changes in top products, price bands, and tags across saved shop snapshots.", "rationale": "Requires repeated shop analyzer snapshots stored locally.", "via": "mcp-command-mirror"},
-			{"name": "Listing Audit", "command": "listing audit", "description": "Audit a listing's keyword and tag fit using EverBee-derived product and keyword context.", "rationale": "Requires joining listing details, tags, and keyword opportunity data in the local store.", "via": "mcp-command-mirror"},
+			{"name": "Listing Audit", "command": "listing audit", "description": "Audit a listing's keyword and tag fit using EverBee-derived product and keyword context.", "rationale": "Refreshes listing/product/keyword context for the target listing when stale, then uses cached evidence for repeat checks.", "via": "mcp-command-mirror"},
 		},
 		"playbook": []map[string]string{
-			{"topic": "Opportunity Shortlist", "insight": "Requires joining EverBee product, keyword, tag, and snapshot data that the app exposes as separate workflows."},
-			{"topic": "Niche Score", "insight": "Requires local joins across keyword research, product analytics, and historical snapshots."},
-			{"topic": "Shop Gaps", "insight": "Requires correlating shop analyzer output with product and keyword history."},
-			{"topic": "Tag Gap", "insight": "Requires matching product tags, keyword scores, and local shop/tag history."},
-			{"topic": "Keyword Clusters", "insight": "Requires local keyword storage, FTS, and clustering across repeated EverBee pulls."},
+			{"topic": "Opportunity Shortlist", "insight": "Uses targeted live EverBee refreshes plus cached research slices; no bulk sync required."},
+			{"topic": "Niche Score", "insight": "Refreshes stale keyword/product evidence for the requested niche, then reuses cached snapshots for history."},
+			{"topic": "Shop Gaps", "insight": "Correlates targeted shop analyzer output with cached product and keyword research for the requested shop."},
+			{"topic": "Tag Gap", "insight": "Matches current product tags and keyword scores with cached research history for the requested query."},
+			{"topic": "Keyword Clusters", "insight": "Clusters targeted keyword suggestions pulled from EverBee and cached for repeated analysis."},
 			{"topic": "Trend Diff", "insight": "Requires local historical snapshots; current UI tables cannot produce agent-ready diffs alone."},
 			{"topic": "Competitor Watch", "insight": "Requires repeated shop analyzer snapshots stored locally."},
-			{"topic": "Listing Audit", "insight": "Requires joining listing details, tags, and keyword opportunity data in the local store."},
+			{"topic": "Listing Audit", "insight": "Refreshes stale listing/product/keyword evidence for the target listing, then reuses cached context."},
 		},
 	}
 	data, _ := json.MarshalIndent(ctx, "", "  ")

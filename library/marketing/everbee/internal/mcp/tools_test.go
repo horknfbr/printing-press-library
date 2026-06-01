@@ -4,9 +4,133 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+
+	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
+
+func TestHandleSearchUsesLiveFirst(t *testing.T) {
+	t.Parallel()
+
+	req := searchRequest("teacher gift", 1)
+	localCalled := false
+	result, err := handleSearchWithSources(context.Background(), req,
+		func(_ context.Context, query string, limit int) ([]json.RawMessage, error) {
+			if query != "teacher gift" {
+				t.Fatalf("query = %q, want teacher gift", query)
+			}
+			if limit != 1 {
+				t.Fatalf("limit = %d, want 1", limit)
+			}
+			return []json.RawMessage{json.RawMessage(`{"id":"live-1","title":"Teacher Gift Mug"}`)}, nil
+		},
+		func(context.Context, string, int) ([]json.RawMessage, error) {
+			localCalled = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("handleSearchWithSources returned protocol error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("handleSearchWithSources returned tool error: %s", toolResultText(t, result))
+	}
+	if localCalled {
+		t.Fatalf("local search was called after live success")
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(got) != 1 || got[0]["id"] != "live-1" {
+		t.Fatalf("result = %#v, want live results", got)
+	}
+}
+
+func TestHandleSearchFallsBackToLocalOnNetworkError(t *testing.T) {
+	t.Parallel()
+
+	req := searchRequest("teacher gift", 25)
+	result, err := handleSearchWithSources(context.Background(), req,
+		func(context.Context, string, int) ([]json.RawMessage, error) {
+			return nil, errors.New("connection refused")
+		},
+		func(_ context.Context, query string, limit int) ([]json.RawMessage, error) {
+			if query != "teacher gift" {
+				t.Fatalf("query = %q, want teacher gift", query)
+			}
+			if limit != 25 {
+				t.Fatalf("limit = %d, want 25", limit)
+			}
+			return []json.RawMessage{json.RawMessage(`{"id":"cached-1","title":"Cached Teacher Gift"}`)}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("handleSearchWithSources returned protocol error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("handleSearchWithSources returned tool error: %s", toolResultText(t, result))
+	}
+	if !strings.Contains(toolResultText(t, result), "cached-1") {
+		t.Fatalf("result = %s, want cached fallback", toolResultText(t, result))
+	}
+}
+
+func TestHandleSearchDoesNotFallBackOnHTTPError(t *testing.T) {
+	t.Parallel()
+
+	req := searchRequest("teacher gift", 25)
+	localCalled := false
+	result, err := handleSearchWithSources(context.Background(), req,
+		func(context.Context, string, int) ([]json.RawMessage, error) {
+			return nil, errors.New("HTTP 401: unauthorized")
+		},
+		func(context.Context, string, int) ([]json.RawMessage, error) {
+			localCalled = true
+			return []json.RawMessage{json.RawMessage(`{"id":"cached-1"}`)}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("handleSearchWithSources returned protocol error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("handleSearchWithSources succeeded, want tool error")
+	}
+	if localCalled {
+		t.Fatalf("local search was called for HTTP error")
+	}
+	if !strings.Contains(toolResultText(t, result), "HTTP 401") {
+		t.Fatalf("result = %s, want HTTP error", toolResultText(t, result))
+	}
+}
+
+func searchRequest(query string, limit float64) mcplib.CallToolRequest {
+	return mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Name: "search",
+			Arguments: map[string]any{
+				"query": query,
+				"limit": limit,
+			},
+		},
+	}
+}
+
+func toolResultText(t *testing.T, result *mcplib.CallToolResult) string {
+	t.Helper()
+	if len(result.Content) != 1 {
+		t.Fatalf("content length = %d, want 1", len(result.Content))
+	}
+	text, ok := mcplib.AsTextContent(result.Content[0])
+	if !ok {
+		t.Fatalf("content[0] = %T, want TextContent", result.Content[0])
+	}
+	return text.Text
+}
 
 // TestValidateReadOnlyQuery_AllowsSelectAndWITH pins the contract: the MCP
 // sql tool's allowlist accepts SELECT and WITH-prefix queries, including

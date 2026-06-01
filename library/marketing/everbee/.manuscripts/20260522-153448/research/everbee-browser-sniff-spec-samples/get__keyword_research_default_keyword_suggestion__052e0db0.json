@@ -43,7 +43,7 @@
     "x-download-options": "noopen",
     "x-frame-options": "SAMEORIGIN",
     "x-permitted-cross-domain-policies": "none",
-    "x-request-id": "afaf4aa5-875a-45b8-903a-270697077443",
+    "x-request-id": "afaf4aa5-875a-45b8-903a-<REDACTED:phone-like-number>",
     "x-runtime": "0.104009",
     "x-xss-protection": "1; mode=block"
   },
