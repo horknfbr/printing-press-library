@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,6 +184,46 @@ func TestResearchRuntimeFallsBackToStaleSnapshotAfterRefreshFailure(t *testing.T
 	}
 }
 
+func TestResearchRuntimeUsesFreshSnapshotWhenPersistenceFails(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	scope := research.ResearchScope{Kind: research.ScopeShop, Value: "gift-shop"}
+	refreshed := research.Snapshot{
+		Scope:     scope,
+		Resources: []string{"shops"},
+		FetchedAt: now,
+		RawRecords: []json.RawMessage{
+			json.RawMessage(`{"id":"shop-2","name":"Fresh Shop"}`),
+		},
+		Evidence: []research.EvidenceRecord{{ID: "shop-2", Title: "Fresh Shop"}},
+	}
+	fetcher := &fakeResearchFetcher{
+		snapshot: refreshed,
+		err:      errors.New("save denied"),
+	}
+	runtime := researchRuntime{fetcher: fetcher, now: func() time.Time { return now }}
+
+	result, err := runtime.resolve(context.Background(), scope, researchOptions{
+		maxAge:    6 * time.Hour,
+		resources: []string{"shops"},
+		limit:     10,
+	}, nil)
+	if err != nil {
+		t.Fatalf("resolve error = %v", err)
+	}
+	if result.Plan.Decision != research.DecisionRefreshTargeted {
+		t.Fatalf("decision = %s, want refresh_targeted", result.Plan.Decision)
+	}
+	if result.Plan.DataSource != research.DataSourceRefreshed {
+		t.Fatalf("data source = %s, want refreshed", result.Plan.DataSource)
+	}
+	if len(result.Snapshot.Evidence) != 1 || result.Snapshot.Evidence[0].ID != "shop-2" {
+		t.Fatalf("snapshot evidence = %#v, want fresh fetched evidence", result.Snapshot.Evidence)
+	}
+	if !warningsContain(result.Plan.Warnings, "persistence failed") {
+		t.Fatalf("warnings = %#v, want persistence warning", result.Plan.Warnings)
+	}
+}
+
 func TestResearchRuntimeTreatsEmptyRefreshAsInsufficientData(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	scope := research.ResearchScope{Kind: research.ScopeQuery, Value: "teacher gift"}
@@ -210,6 +251,15 @@ func TestResearchRuntimeTreatsEmptyRefreshAsInsufficientData(t *testing.T) {
 	if len(result.Plan.Warnings) == 0 {
 		t.Fatalf("warnings = %#v, want empty refresh warning", result.Plan.Warnings)
 	}
+}
+
+func warningsContain(warnings []string, needle string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestResearchRuntimeFallsBackWhenRefreshReturnsNoEvidence(t *testing.T) {

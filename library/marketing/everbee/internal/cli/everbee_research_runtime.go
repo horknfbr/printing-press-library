@@ -77,7 +77,7 @@ func (r researchRuntime) resolve(ctx context.Context, scope research.ResearchSco
 
 func (r researchRuntime) resolveRefresh(ctx context.Context, scope research.ResearchScope, opts researchOptions, snapshots []research.Snapshot, plan research.ResearchPlan, now time.Time) (researchResult, error) {
 	snapshot, err := r.fetcher.Fetch(ctx, scope, opts.resources, opts.limit)
-	if err == nil && snapshotHasUsableEvidence(snapshot) {
+	if snapshotHasUsableEvidence(snapshot) {
 		snapshot.Scope = scope
 		if snapshot.FetchedAt.IsZero() {
 			snapshot.FetchedAt = now
@@ -88,6 +88,9 @@ func (r researchRuntime) resolveRefresh(ctx context.Context, scope research.Rese
 		plan.Snapshot = &snapshot
 		plan.DataSource = research.DataSourceRefreshed
 		plan.Warnings = append(plan.Warnings, snapshot.Warnings...)
+		if err != nil {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("targeted EverBee refresh persistence failed: %v", err))
+		}
 		plan.Freshness = research.Freshness{
 			FetchedAt:     snapshot.FetchedAt,
 			AgeSeconds:    0,
@@ -217,7 +220,7 @@ func (f liveResearchFetcher) Fetch(ctx context.Context, scope research.ResearchS
 	}
 	if f.snapshotStore != nil {
 		if err := f.snapshotStore.Save(ctx, snapshot); err != nil {
-			return research.Snapshot{}, err
+			return snapshot, err
 		}
 	}
 	return snapshot, nil
