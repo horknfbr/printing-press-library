@@ -123,6 +123,14 @@ Every PR against this repo gets an automated review from **Greptile** alongside 
 
 **The bar is resolving every Greptile finding before merge** — the 0-5 score is a confidence signal, not a guarantee, so don't treat the number itself as the gate. 4/5 and 5/5 are both acceptable end states; the score will land in that range naturally once threads are addressed. A 5/5 with open P1s is still not ready; a 4/5 with everything resolved is ready. Treat every P0 and P1 as blocking; P2s require either a fix or a concrete reply explaining why we're deferring.
 
+Greptile feedback is not limited to GitHub review threads. It also edits top-level PR summary comments, and those summaries can contain actionable issue blocks, including `Comments Outside Diff`, even when the thread list has zero unresolved comments. Before saying a PR is ready, run the repo-owned review-state helper:
+
+```bash
+python3 .github/scripts/pr-review-state/greptile_feedback.py <PR_NUMBER>
+```
+
+`PR_NUMBER` is the GitHub pull request number, for example `1093` — not a branch name, URL, issue number, or commit SHA. The helper defaults to `mvanhorn/printing-press-library` and exits non-zero until all of these are true: Greptile Review passes, Greptile policy gate passes, there are no unresolved non-outdated review threads, the latest `greptile-apps` top-level comment reviewed the current PR head SHA, and that latest comment has no actionable markers such as `Issue 1 of`, `Fix the following`, `Comments Outside Diff`, `remaining open item`, `needs attention`, or `Safe to merge after fixing/reviewing`.
+
 If you (an agent) opened the PR, you own driving it to ready-to-merge:
 
 1. **Watch for the review.** Greptile posts within a few minutes of PR open or push. Read findings with `gh pr view <PR> --comments`; check the summary comment for the score and the inline threads for P0/P1/P2 tags.
