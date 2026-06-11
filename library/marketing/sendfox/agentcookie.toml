@@ -13,4 +13,5 @@ path = "~/.config/sendfox-pp-cli/config.toml"
 default = false
 
 [sync.keys]
+SENDFOX_API_TOKEN = true
 SENDFOX_BEARER_AUTH = true

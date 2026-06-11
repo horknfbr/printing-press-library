@@ -123,11 +123,11 @@ func sendfoxFetchAll(c *client.Client, ctx context.Context, path string, params 
 		// is not a reliable end-of-collection signal.
 		var obj map[string]any
 		if json.Unmarshal(raw, &obj) == nil {
-			if v, hasNext := obj["next_page_url"]; hasNext && v != nil && v != "" {
+			if next, hasNext := obj["next_page_url"]; hasNext {
+				if next == nil || next == "" {
+					break
+				}
 				continue
-			}
-			if v, hasNext := obj["next_page_url"]; hasNext && (v == nil || v == "") {
-				break
 			}
 			if meta, ok := obj["meta"].(map[string]any); ok {
 				if cur, cok := meta["current_page"].(float64); cok {
