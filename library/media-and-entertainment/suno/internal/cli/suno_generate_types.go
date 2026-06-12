@@ -130,8 +130,8 @@ type generateInput struct {
 	mv           string // wire model key
 	title        string
 	tags         string
-	prompt       string // lyrics for custom, description for inspiration
 	negativeTags string // styles to exclude; empty -> sent as ""
+	prompt       string // lyrics for custom, description for inspiration
 	instrumental bool
 	personaID    string
 	token        string // hCaptcha token; empty -> nil
