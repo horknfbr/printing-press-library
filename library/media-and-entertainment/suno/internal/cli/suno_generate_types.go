@@ -131,6 +131,7 @@ type generateInput struct {
 	title        string
 	tags         string
 	prompt       string // lyrics for custom, description for inspiration
+	negativeTags string // styles to exclude; empty -> sent as ""
 	instrumental bool
 	personaID    string
 	token        string // hCaptcha token; empty -> nil
@@ -195,7 +196,7 @@ func buildGenerateBody(in generateInput) sunoGenerateBody {
 		GenerationType:        "TEXT",
 		Title:                 alwaysStrPtr(in.title),
 		Tags:                  alwaysStrPtr(in.tags),
-		NegativeTags:          "",
+		NegativeTags:          in.negativeTags,
 		Mv:                    in.mv,
 		Prompt:                in.prompt,
 		MakeInstrumental:      in.instrumental,

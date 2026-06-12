@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "id": "generate-exclude-negative-tags",
+  "applied_at": "2026-06-12",
+  "base_run_id": "20260528-222057",
+  "base_printing_press_version": "4.14.0",
+  "summary": "Wire --exclude through to negative_tags on 'generate create' (was accepted but folded out).",
+  "reason": "The --exclude flag on 'generate create' was registered and documented but discarded: suno_generate.go did `_ = exclude` and buildGenerateBody hardcoded NegativeTags to \"\" under a wrong \"upstream contract\" assumption. Suno's UI Exclude-Styles feature populates negative_tags, so the flag value is now plumbed through generateInput.negativeTags into the request body. Empty stays \"\", so the default body is byte-identical to the known-good flow. Verified live: generated clips round-trip negative_tags=\"country, banjo\" intact (request body -> Suno server -> clip metadata), no HTTP 500.",
+  "files": [
+    "internal/cli/suno_generate.go",
+    "internal/cli/suno_generate_types.go",
+    "internal/cli/suno_generate_types_test.go"
+  ],
+  "validated_outcome": "publish validate passed; go test ./internal/cli/ -run TestBuildGenerateBody passes; live smoke test confirmed negative_tags round-trip.",
+  "findings_addressed": [
+    "generate-exclude-negative-tags"
+  ]
+}
